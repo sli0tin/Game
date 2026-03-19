@@ -1,0 +1,13 @@
+{
+  "name": "game-show-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Arabic team quiz game from Excel files",
+  "scripts": {
+    "start": "python3 -m http.server 4173"
+  },
+  "dependencies": {
+    "html2canvas": "^1.4.1",
+    "xlsx": "^0.18.5"
+  }
+}

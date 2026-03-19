@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ساحة التحدي</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body data-phase="upload">
+    <div class="ambient ambient-a"></div>
+    <div class="ambient ambient-b"></div>
+    <div class="ambient ambient-c"></div>
+
+    <main class="app-shell">
+      <header class="hero">
+        <div class="hero-copy">
+          <span class="eyebrow">لعبة فرق تفاعلية من ملف إكسل</span>
+          <h1>ساحة التحدي</h1>
+          <p>
+            ارفع ملف الأسئلة، اختر التصنيفات، جهّز الفريقين، وابدأ مباراة
+            مبهرة تحفظ كل خطوة داخل المتصفح.
+          </p>
+        </div>
+      </header>
+
+      <section id="app" class="app-stage" aria-live="polite"></section>
+    </main>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <script defer src="./node_modules/xlsx/dist/xlsx.full.min.js"></script>
+    <script defer src="./node_modules/html2canvas/dist/html2canvas.min.js"></script>
+    <script defer src="./app.js"></script>
+  </body>
+</html>
