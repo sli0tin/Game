@@ -2402,7 +2402,7 @@ async function shareCurrentView() {
     });
 
     const canvas = await window.html2canvas(shareRoot, {
-      backgroundColor: "#07111f",
+      backgroundColor: null,
       scale: 1.35,
       useCORS: true,
       width: shareWidth,
@@ -2424,10 +2424,12 @@ async function shareCurrentView() {
         clonedBody.style.width = `${shareWidth}px`;
         clonedBody.style.minHeight = `${shareHeight}px`;
         clonedBody.style.overflow = "visible";
+        clonedBody.style.background = "transparent";
         clonedShareRoot.style.width = `${shareWidth}px`;
         clonedShareRoot.style.maxWidth = `${shareWidth}px`;
         clonedShareRoot.style.minWidth = `${shareWidth}px`;
         clonedShareRoot.style.margin = "0 auto";
+        clonedShareRoot.style.background = "transparent";
 
         Array.from(clonedShareRoot.querySelectorAll(".no-capture")).forEach((element) => {
           element.style.visibility = "hidden";
@@ -2435,7 +2437,8 @@ async function shareCurrentView() {
       },
     });
 
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    const trimmedCanvas = trimTransparentCanvas(canvas);
+    const blob = await new Promise((resolve) => trimmedCanvas.toBlob(resolve, "image/png"));
     if (!blob) {
       throw new Error("تعذر تحويل الصفحة إلى صورة.");
     }
@@ -2467,6 +2470,68 @@ async function shareCurrentView() {
       element.style.visibility = previousVisibility[index];
     });
   }
+}
+
+function trimTransparentCanvas(sourceCanvas) {
+  const context = sourceCanvas.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    return sourceCanvas;
+  }
+
+  const { width, height } = sourceCanvas;
+  const imageData = context.getImageData(0, 0, width, height).data;
+  let top = height;
+  let left = width;
+  let right = -1;
+  let bottom = -1;
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const alpha = imageData[(y * width + x) * 4 + 3];
+      if (alpha <= 8) {
+        continue;
+      }
+
+      if (x < left) left = x;
+      if (x > right) right = x;
+      if (y < top) top = y;
+      if (y > bottom) bottom = y;
+    }
+  }
+
+  if (right === -1 || bottom === -1) {
+    return sourceCanvas;
+  }
+
+  const padding = 8;
+  const cropLeft = Math.max(0, left - padding);
+  const cropTop = Math.max(0, top - padding);
+  const cropRight = Math.min(width - 1, right + padding);
+  const cropBottom = Math.min(height - 1, bottom + padding);
+  const cropWidth = cropRight - cropLeft + 1;
+  const cropHeight = cropBottom - cropTop + 1;
+
+  const trimmedCanvas = document.createElement("canvas");
+  trimmedCanvas.width = cropWidth;
+  trimmedCanvas.height = cropHeight;
+  const trimmedContext = trimmedCanvas.getContext("2d");
+  if (!trimmedContext) {
+    return sourceCanvas;
+  }
+
+  trimmedContext.drawImage(
+    sourceCanvas,
+    cropLeft,
+    cropTop,
+    cropWidth,
+    cropHeight,
+    0,
+    0,
+    cropWidth,
+    cropHeight
+  );
+
+  return trimmedCanvas;
 }
 
 function measureShareContentHeight(shareRoot, shareWidth) {
