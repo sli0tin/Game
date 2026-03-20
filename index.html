@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ساحة التحدي</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body data-phase="upload">
+    <div class="ambient ambient-a"></div>
+    <div class="ambient ambient-b"></div>
+    <div class="ambient ambient-c"></div>
+
+    <main class="app-shell">
+      <header class="hero">
+        <div class="hero-copy">
+          <span class="eyebrow">لعبة فرق تفاعلية من ملف إكسل</span>
+          <h1>ساحة التحدي</h1>
+          <p>
+            ارفع ملف الأسئلة، اختر التصنيفات، جهّز الفريقين، وابدأ مباراة
+            مبهرة تحفظ كل خطوة داخل المتصفح.
+          </p>
+        </div>
+      </header>
+
+      <section id="app" class="app-stage" aria-live="polite"></section>
+    </main>
+
+    <div id="toast" class="toast" hidden></div>
+    <div id="boot-error" class="boot-error" hidden></div>
+
+    <script>
+      (async function bootstrapSite() {
+        const bootError = document.getElementById("boot-error");
+
+        function showBootError(message) {
+          if (!bootError) return;
+          bootError.hidden = false;
+          bootError.textContent = message;
+        }
+
+        function loadScript(candidates, label) {
+          return new Promise((resolve, reject) => {
+            let currentIndex = 0;
+
+            function tryNext() {
+              if (currentIndex >= candidates.length) {
+                reject(new Error(`تعذر تحميل ${label}. تأكد من وجود ملفاته داخل الموقع.`));
+                return;
+              }
+
+              const script = document.createElement("script");
+              script.src = candidates[currentIndex];
+              script.async = false;
+              currentIndex += 1;
+
+              script.onload = () => resolve(script.src);
+              script.onerror = () => {
+                script.remove();
+                tryNext();
+              };
+
+              document.body.appendChild(script);
+            }
+
+            tryNext();
+          });
+        }
+
+        try {
+          await loadScript(
+            [
+              "./vendor/xlsx.full.min.js",
+              "./Vendor/xlsx.full.min.js",
+              "./xlsx.full.min.js",
+            ],
+            "مكتبة قراءة الإكسل"
+          );
+
+          await loadScript(
+            [
+              "./vendor/html2canvas.min.js",
+              "./Vendor/html2canvas.min.js",
+              "./html2canvas.min.js",
+            ],
+            "مكتبة مشاركة الصور"
+          );
+
+          await loadScript(["./app.js"], "ملف التطبيق");
+        } catch (error) {
+          showBootError(
+            error instanceof Error ? error.message : "تعذر تشغيل الموقع على هذا المسار."
+          );
+        }
+      })();
+    </script>
+  </body>
+</html>
