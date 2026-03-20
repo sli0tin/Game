@@ -1,7 +1,9 @@
 const STORAGE_KEY = "arena-quiz-state-v1";
+const SHUFFLE_MEMORY_KEY = "arena-quiz-shuffle-memory-v1";
 const POINT_VALUES = [200, 400, 600];
 const OPTION_KEYS = ["A", "B", "C", "D"];
 const WRONG_PENALTY = 50;
+const DESKTOP_SHARE_WIDTH = 1440;
 const ABILITY_META = {
   double: {
     icon: "2×",
@@ -31,6 +33,7 @@ const appElement = document.querySelector("#app");
 const toastElement = document.querySelector("#toast");
 
 let toastTimer = null;
+let shuffleMemory = loadShuffleMemory();
 let state = loadState() || createInitialState();
 
 render();
@@ -141,6 +144,7 @@ function createInitialState() {
   return {
     phase: "upload",
     fileName: "",
+    fileSignature: "",
     categories: [],
     selectedCategoryIds: [],
     teamDraft,
@@ -189,6 +193,24 @@ function loadState() {
   } catch {
     return null;
   }
+}
+
+function loadShuffleMemory() {
+  try {
+    const raw = localStorage.getItem(SHUFFLE_MEMORY_KEY);
+    if (!raw) {
+      return {};
+    }
+
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function persistShuffleMemory() {
+  localStorage.setItem(SHUFFLE_MEMORY_KEY, JSON.stringify(shuffleMemory));
 }
 
 function commit(nextState) {
@@ -1281,11 +1303,14 @@ function buildBoard(selectedCategoryIds) {
   return categories.map((category) => {
     const pointPools = {};
     POINT_VALUES.forEach((pointValue) => {
-      pointPools[pointValue] = shuffleArray([
-        ...(category.questionsByPoints[String(pointValue)] || []).filter(
-          (question) => !usedQuestionIdSet.has(question.id)
-        ),
-      ]);
+      const availableQuestions = (category.questionsByPoints[String(pointValue)] || []).filter(
+        (question) => !usedQuestionIdSet.has(question.id)
+      );
+      pointPools[pointValue] = getRandomizedQuestionPool(
+        availableQuestions,
+        state.fileSignature,
+        `${category.id}:${pointValue}`
+      );
     });
 
     const slots = {
@@ -1655,6 +1680,7 @@ function restartWithSameFile() {
   commit({
     ...createInitialState(),
     fileName: state.fileName,
+    fileSignature: state.fileSignature,
     categories: state.categories,
     selectedCategoryIds: resetSelection,
     upload: {
@@ -1726,12 +1752,14 @@ async function handleFileSelection(file) {
       },
     });
 
+    const fileSignature = computeFileSignature(arrayBuffer, file.name);
     const { categories, questionCount } = parseWorkbook(arrayBuffer);
     const selectedCategoryIds =
       categories.length <= 6 ? categories.map((category) => category.id) : [];
 
     commit({
       ...state,
+      fileSignature,
       categories,
       selectedCategoryIds,
       upload: {
@@ -2288,31 +2316,118 @@ function escapeHtmlAttribute(value) {
 function shuffleArray(items) {
   const copy = [...items];
   for (let index = copy.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(Math.random() * (index + 1));
+    const swapIndex = getRandomInt(index + 1);
     [copy[index], copy[swapIndex]] = [copy[swapIndex], copy[index]];
   }
   return copy;
 }
 
+function getRandomInt(max) {
+  if (max <= 0) {
+    return 0;
+  }
+
+  if (
+    typeof window !== "undefined" &&
+    window.crypto &&
+    typeof window.crypto.getRandomValues === "function"
+  ) {
+    const values = new Uint32Array(1);
+    window.crypto.getRandomValues(values);
+    return values[0] % max;
+  }
+
+  return Math.floor(Math.random() * max);
+}
+
+function getRandomizedQuestionPool(questions, fileSignature, bucketKey) {
+  const shuffled = shuffleArray(questions);
+
+  if (!fileSignature || !shuffled.length) {
+    return shuffled;
+  }
+
+  const fileMemory = shuffleMemory[fileSignature] || {};
+  const lastFirstQuestionId = fileMemory[bucketKey];
+
+  if (shuffled.length > 1 && lastFirstQuestionId && shuffled[0].id === lastFirstQuestionId) {
+    shuffled.push(shuffled.shift());
+  }
+
+  shuffleMemory = {
+    ...shuffleMemory,
+    [fileSignature]: {
+      ...fileMemory,
+      [bucketKey]: shuffled[0]?.id || "",
+    },
+  };
+  persistShuffleMemory();
+
+  return shuffled;
+}
+
+function computeFileSignature(arrayBuffer, fileName = "") {
+  const bytes = new Uint8Array(arrayBuffer);
+  let hash = 2166136261;
+
+  for (const value of bytes) {
+    hash ^= value;
+    hash = Math.imul(hash, 16777619);
+  }
+
+  for (let index = 0; index < fileName.length; index += 1) {
+    hash ^= fileName.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return `file-${(hash >>> 0).toString(16)}-${bytes.length}`;
+}
+
 async function shareCurrentView() {
-  const shareRoot = appElement.querySelector("[data-share-root]");
-  if (!shareRoot || !window.html2canvas) {
+  if (!window.html2canvas) {
     showToast("تعذر تجهيز الصورة للمشاركة.");
     return;
   }
 
-  const hiddenElements = Array.from(shareRoot.querySelectorAll(".no-capture"));
+  const captureTarget = document.body;
+  const hiddenElements = Array.from(captureTarget.querySelectorAll(".no-capture"));
   const previousVisibility = hiddenElements.map((element) => element.style.visibility);
+  const pageHeight = Math.max(
+    document.body.scrollHeight,
+    document.body.offsetHeight,
+    document.documentElement.scrollHeight,
+    document.documentElement.offsetHeight,
+    document.documentElement.clientHeight
+  );
 
   try {
     hiddenElements.forEach((element) => {
       element.style.visibility = "hidden";
     });
 
-    const canvas = await window.html2canvas(shareRoot, {
+    const canvas = await window.html2canvas(captureTarget, {
       backgroundColor: null,
-      scale: Math.min(window.devicePixelRatio || 2, 2),
+      scale: 1.35,
       useCORS: true,
+      width: DESKTOP_SHARE_WIDTH,
+      windowWidth: DESKTOP_SHARE_WIDTH,
+      height: pageHeight,
+      windowHeight: pageHeight,
+      scrollX: 0,
+      scrollY: 0,
+      onclone(clonedDocument) {
+        const clonedBody = clonedDocument.body;
+        const clonedRoot = clonedDocument.documentElement;
+
+        clonedRoot.style.width = `${DESKTOP_SHARE_WIDTH}px`;
+        clonedBody.style.width = `${DESKTOP_SHARE_WIDTH}px`;
+        clonedBody.style.minHeight = `${pageHeight}px`;
+        clonedBody.style.overflow = "visible";
+
+        Array.from(clonedDocument.querySelectorAll(".no-capture")).forEach((element) => {
+          element.style.visibility = "hidden";
+        });
+      },
     });
 
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
