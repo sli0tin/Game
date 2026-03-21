@@ -1,8 +1,7 @@
-const STORAGE_KEY = "arena-quiz-state-v1";
+const STORAGE_KEY = "arena-quiz-state-v2";
 const SHUFFLE_MEMORY_KEY = "arena-quiz-shuffle-memory-v1";
 const POINT_VALUES = [200, 400, 600];
 const OPTION_KEYS = ["A", "B", "C", "D"];
-const WRONG_PENALTY = 50;
 const DESKTOP_SHARE_WIDTH = 1320;
 const ABILITY_META = {
   double: {
@@ -22,11 +21,19 @@ const TEAM_COLORS = [
   "#ff6b6b",
   "#4cc9f0",
   "#ffd166",
-  "#a855f7",
   "#22c55e",
+  "#a855f7",
   "#fb7185",
   "#f97316",
   "#2dd4bf",
+  "#60a5fa",
+  "#f59e0b",
+  "#10b981",
+  "#ec4899",
+  "#8b5cf6",
+  "#ef4444",
+  "#14b8a6",
+  "#84cc16",
 ];
 
 const appElement = document.querySelector("#app");
@@ -57,8 +64,8 @@ function createInitialUploadState() {
 
 function createInitialTeamDraft() {
   return [
-    { name: "فريق الأبطال", color: TEAM_COLORS[0] },
-    { name: "فريق النجوم", color: TEAM_COLORS[1] },
+    { name: "لاعب 1", color: TEAM_COLORS[0] },
+    { name: "لاعب 2", color: TEAM_COLORS[1] },
   ];
 }
 
@@ -74,16 +81,6 @@ function createAbilityState() {
     block: {
       used: false,
     },
-  };
-}
-
-function createTeamState(team, index) {
-  return {
-    id: `team-${index}`,
-    name: team.name,
-    color: team.color,
-    points: 0,
-    abilities: createAbilityState(),
   };
 }
 
@@ -105,22 +102,56 @@ function mergeAbilityState(abilities = {}) {
   };
 }
 
-function normalizeStoredTeams(teams, teamDraft) {
-  return [0, 1].map((index) => {
-    const draftTeam = teamDraft[index] || createInitialTeamDraft()[index];
-    const storedTeam = teams?.[index] || {};
+function createPlayerState({
+  id,
+  name,
+  color,
+  points = 0,
+  abilities,
+  blockedByPlayerId = null,
+}) {
+  return {
+    id,
+    name,
+    color,
+    points,
+    abilities: mergeAbilityState(abilities),
+    blockedByPlayerId,
+  };
+}
 
-    return {
-      ...createTeamState(
+function createDraftPlayer(team, index) {
+  return createPlayerState({
+    id: `player-${index + 1}`,
+    name: team.name,
+    color: team.color,
+  });
+}
+
+function normalizeStoredTeams(teams, teamDraft) {
+  const fallbackPlayers = teamDraft.map((team, index) => createDraftPlayer(team, index));
+  const sourcePlayers =
+    Array.isArray(teams) && teams.length ? teams : fallbackPlayers;
+
+  return sourcePlayers.map((storedPlayer, index) => {
+    const fallbackPlayer =
+      fallbackPlayers[index] ||
+      createDraftPlayer(
         {
-          name: storedTeam.name || draftTeam.name,
-          color: storedTeam.color || draftTeam.color,
+          name: storedPlayer.name || `لاعب ${index + 1}`,
+          color: storedPlayer.color || TEAM_COLORS[index % TEAM_COLORS.length],
         },
         index
-      ),
-      ...storedTeam,
-      abilities: mergeAbilityState(storedTeam.abilities),
-    };
+      );
+
+    return createPlayerState({
+      id: storedPlayer.id || fallbackPlayer.id,
+      name: storedPlayer.name || fallbackPlayer.name,
+      color: storedPlayer.color || fallbackPlayer.color,
+      points: Number(storedPlayer.points) || 0,
+      abilities: storedPlayer.abilities,
+      blockedByPlayerId: storedPlayer.blockedByPlayerId || null,
+    });
   });
 }
 
@@ -131,9 +162,11 @@ function normalizeCurrentQuestion(currentQuestion) {
 
   return {
     ...currentQuestion,
-    multiplier: Number(currentQuestion.multiplier) || 1,
     removedOptionKeys: Array.isArray(currentQuestion.removedOptionKeys)
       ? currentQuestion.removedOptionKeys
+      : [],
+    blockedPlayerIds: Array.isArray(currentQuestion.blockedPlayerIds)
+      ? currentQuestion.blockedPlayerIds
       : [],
   };
 }
@@ -148,12 +181,11 @@ function createInitialState() {
     categories: [],
     selectedCategoryIds: [],
     teamDraft,
-    teams: teamDraft.map((team, index) => createTeamState(team, index)),
+    teams: teamDraft.map((team, index) => createDraftPlayer(team, index)),
     board: [],
-    activeTeamIndex: null,
     currentQuestion: null,
-    pendingAnswerKey: "",
-    confirmAnswer: false,
+    selectedResponderId: "",
+    dialog: null,
     lastResult: null,
     sessionUsedQuestionIds: [],
     upload: createInitialUploadState(),
@@ -172,9 +204,10 @@ function loadState() {
       return null;
     }
 
-    const teamDraft = Array.isArray(parsed.teamDraft) && parsed.teamDraft.length
-      ? parsed.teamDraft
-      : createInitialTeamDraft();
+    const teamDraft =
+      Array.isArray(parsed.teamDraft) && parsed.teamDraft.length
+        ? parsed.teamDraft
+        : createInitialTeamDraft();
 
     return {
       ...createInitialState(),
@@ -226,11 +259,7 @@ function resetAllState() {
 }
 
 function render() {
-  const effectivePhase =
-    state.phase === "answer"
-      ? `answer-${state.lastResult?.type || (state.lastResult?.isCorrect ? "correct" : "wrong")}`
-      : state.phase;
-  document.body.dataset.phase = effectivePhase;
+  document.body.dataset.phase = getBodyPhase();
 
   switch (state.phase) {
     case "category-select":
@@ -245,6 +274,9 @@ function render() {
     case "question":
       appElement.innerHTML = renderQuestionScreen();
       break;
+    case "answer-select":
+      appElement.innerHTML = renderAnswerSelectScreen();
+      break;
     case "answer":
       appElement.innerHTML = renderAnswerScreen();
       break;
@@ -256,6 +288,22 @@ function render() {
       appElement.innerHTML = renderUploadScreen();
       break;
   }
+}
+
+function getBodyPhase() {
+  if (state.phase !== "answer") {
+    return state.phase;
+  }
+
+  if (state.lastResult?.type === "correct") {
+    return "answer-correct";
+  }
+
+  if (state.lastResult?.type === "blockNotice") {
+    return "answer-blocked";
+  }
+
+  return "answer-wrong";
 }
 
 function renderUploadScreen() {
@@ -273,7 +321,7 @@ function renderUploadScreen() {
           <h2 class="section-title">حمّل ملف الإكسل ثم ابدأ اللعب</h2>
           <p class="section-subtitle">
             الصيغة المتوقعة: أعمدة للتصنيف، السؤال، الخيارات، الإجابة الصحيحة، والنقاط.
-            يدعم الموقع نقاط <strong>200 / 400 / 600</strong> كما في النموذج الذي أرسلته.
+            يدعم الموقع نقاط <strong>200 / 400 / 600</strong> كما في النموذج.
           </p>
 
           <label class="drop-zone">
@@ -348,7 +396,8 @@ function renderUploadScreen() {
             <h3>ما الذي سيحدث بعد الرفع؟</h3>
             <p>
               سيقرأ الموقع الملف، يجهز التصنيفات، ثم يفتح لك مسارًا منظمًا:
-              اختيار التصنيفات، إعداد الفريقين، ثم لوحة اللعب الثنائية.
+              اختيار التصنيفات، إعداد أول لاعبين، ثم لوحة لعب يمكن أن تضيف
+              إليها لاعبين جدد أثناء المباراة.
             </p>
           </div>
 
@@ -358,12 +407,12 @@ function renderUploadScreen() {
               <span>عدد التصنيفات المعروضة في المباراة الواحدة</span>
             </div>
             <div class="mini-stat">
-              <strong>2</strong>
-              <span>فريقان بألوان مستقلة ونقاط محفوظة محليًا</span>
+              <strong>+2</strong>
+              <span>تبدأ بلاعبين ويمكن إضافة لاعبين آخرين أثناء اللعب</span>
             </div>
             <div class="mini-stat">
               <strong>0</strong>
-              <span>تكرار للأسئلة داخل المباراة الحالية</span>
+              <span>تكرار للأسئلة داخل الجلسة الحالية لنفس الملف</span>
             </div>
           </div>
 
@@ -392,7 +441,7 @@ function renderCategorySelectionScreen() {
       ? "كل أسئلة هذا الملف استُخدمت بالفعل في هذه الجلسة."
       : availableCategories.length > 6
         ? `اختر ${targetCount} تصنيفات بالضبط من أصل ${availableCategories.length} تصنيفًا ما زال متاحًا في هذه الجلسة.`
-        : `هذه هي التصنيفات المتبقية في الجلسة الحالية، وهي محددة مسبقًا.`;
+        : "هذه هي التصنيفات المتبقية في الجلسة الحالية، وهي محددة مسبقًا.";
 
   return `
     <section class="screen panel">
@@ -431,11 +480,12 @@ function renderCategorySelectionScreen() {
               );
               const exhausted = remainingSlots === 0;
               const selected = !exhausted && selectedIds.includes(category.id);
-              const selectableAttr = lockedSelection || exhausted
-                ? ""
-                : `data-action="toggle-category" data-category-id="${escapeHtmlAttribute(
-                    category.id
-                  )}"`;
+              const selectableAttr =
+                lockedSelection || exhausted
+                  ? ""
+                  : `data-action="toggle-category" data-category-id="${escapeHtmlAttribute(
+                      category.id
+                    )}"`;
 
               return `
                 <article class="category-card ${selected ? "selected" : ""} ${
@@ -473,10 +523,10 @@ function renderTeamSetupScreen() {
   return `
     <section class="screen panel">
       <div class="panel-inner">
-        <h2 class="section-title">أسماء الفريقين وألوانهما</h2>
+        <h2 class="section-title">أسماء أول لاعبين وألوانهما</h2>
         <p class="section-subtitle">
-          اكتب اسم كل فريق، اختر له لونًا، ثم ابدأ المباراة. كل فريق سيملك جانبًا
-          واحدًا فقط من بطاقات التصنيفات.
+          اكتب اسم أول لاعبين، اختر لون كل لاعب، ثم ابدأ اللعبة. يمكنك إضافة
+          لاعبين جدد لاحقًا أثناء المباراة.
         </p>
 
         <div class="helper-row">
@@ -489,18 +539,18 @@ function renderTeamSetupScreen() {
           <div class="teams-grid">
             ${state.teamDraft
               .map((team, index) => {
-                const label = index === 0 ? "الفريق الأيسر" : "الفريق الأيمن";
+                const label = index === 0 ? "اللاعب الأول" : "اللاعب الثاني";
 
                 return `
                   <article class="team-card">
                     <h3>${label}</h3>
                     <p class="helper-text">
-                      هذا الفريق سيتحكم في الجهة ${index === 0 ? "اليسرى" : "اليمنى"} من الأزرار.
+                      هذا اللاعب سيظهر أعلى اللوحة مع نقاطه ومميزاته الفردية.
                     </p>
                     <input
                       type="text"
                       value="${escapeHtmlAttribute(team.name)}"
-                      placeholder="اسم الفريق"
+                      placeholder="اسم اللاعب"
                       maxlength="30"
                       data-team-name-index="${index}"
                     />
@@ -508,7 +558,7 @@ function renderTeamSetupScreen() {
                       ${TEAM_COLORS.map(
                         (color) => `
                           <button
-                            class="color-swatch ${team.color === color ? "active" : ""}"
+                            class="color-swatch ${normalizeColorHex(team.color) === normalizeColorHex(color) ? "active" : ""}"
                             type="button"
                             title="${escapeHtmlAttribute(color)}"
                             style="background:${color}"
@@ -521,7 +571,7 @@ function renderTeamSetupScreen() {
                     </div>
                     <div class="team-preview" style="border-color:${team.color};">
                       <div class="team-mark" style="--team-color:${team.color};">${escapeHtml(
-                        team.name || `الفريق ${index + 1}`
+                        team.name || `لاعب ${index + 1}`
                       )}</div>
                       <div class="team-meta">
                         <span>اللون المختار</span>
@@ -547,57 +597,56 @@ function renderTeamSetupScreen() {
 }
 
 function renderBoardScreen() {
-  const activeTeam = Number.isInteger(state.activeTeamIndex)
-    ? state.teams[state.activeTeamIndex]
-    : null;
   const remaining = countRemainingSlots(state.board);
   const total = countTotalAvailableSlots(state.board);
-  const pendingDoubleTeams = state.teams.filter((team) => team.abilities.double.pending);
-  const boardPrompt = activeTeam ? `الدور الآن على ${activeTeam.name}` : "";
+  const pendingDoubles = state.teams.filter((player) => player.abilities.double.pending);
+  const blockedPlayers = state.teams.filter((player) => player.blockedByPlayerId);
 
   return `
     <section class="screen">
-      <div class="board-view" data-share-root>
-        ${renderScorePanel(state.teams[0], 0, 0 === state.activeTeamIndex)}
-
-        <div class="board-center">
-          <div class="panel board-banner">
-            <div class="panel-inner" style="padding:0;">
-              <h2 class="section-title">لوحة التحدي</h2>
+      <div class="board-center board-canvas" data-share-root>
+        <div class="panel board-banner">
+          <div class="panel-inner" style="padding:0;">
+            <h2 class="section-title">لوحة التحدي</h2>
+            <div class="helper-row">
+              <div class="pill">المتبقي: ${formatNumber(remaining)} / ${formatNumber(total)}</div>
+              <div class="pill">كل الأسئلة الآن محايدة، وبعد عرض الجواب حدّد اللاعب الذي أجاب</div>
               ${
-                boardPrompt
-                  ? `<p class="section-subtitle">${escapeHtml(boardPrompt)}</p>`
+                pendingDoubles.length
+                  ? `<div class="pill">2× جاهز لـ ${pendingDoubles
+                      .map(
+                        (player) =>
+                          `<span style="color:${player.color};">${escapeHtml(player.name)}</span>`
+                      )
+                      .join(" / ")}</div>`
                   : ""
               }
-              <div class="helper-row">
-                <div class="pill">المتبقي: ${formatNumber(remaining)} / ${formatNumber(total)}</div>
-                <div class="pill">اختر من جهة الفريق صاحب الدور فقط</div>
-                ${
-                  pendingDoubleTeams.length
-                    ? `<div class="pill">2× جاهز لـ ${pendingDoubleTeams
-                        .map(
-                          (team) =>
-                            `<span style="color:${team.color};">${escapeHtml(team.name)}</span>`
-                        )
-                        .join(" / ")}</div>`
-                    : ""
-                }
-              </div>
+              ${
+                blockedPlayers.length
+                  ? `<div class="pill">بلوك الجولة القادمة: ${blockedPlayers
+                      .map((player) => escapeHtml(player.name))
+                      .join(" / ")}</div>`
+                  : ""
+              }
             </div>
-          </div>
-
-          <div class="board-grid">
-            ${state.board.map((card) => renderBoardCard(card)).join("")}
-          </div>
-
-          <div class="btn-row no-capture">
-            <button class="btn btn-secondary" data-action="share-current">إرسال</button>
-            <button class="btn btn-ghost" data-action="reset-all">تغيير الملف</button>
           </div>
         </div>
 
-        ${renderScorePanel(state.teams[1], 1, 1 === state.activeTeamIndex)}
+        <div class="players-strip">
+          ${state.teams.map((player) => renderPlayerBoardCard(player)).join("")}
+        </div>
+
+        <div class="board-grid">
+          ${state.board.map((card) => renderBoardCard(card)).join("")}
+        </div>
+
+        <div class="btn-row no-capture">
+          <button class="btn btn-secondary" data-action="share-current">إرسال</button>
+          <button class="btn btn-ghost" data-action="reset-all">تغيير الملف</button>
+        </div>
       </div>
+
+      ${renderDialog()}
     </section>
   `;
 }
@@ -608,88 +657,55 @@ function renderQuestionScreen() {
     return renderFallbackScreen("لا يوجد سؤال نشط حاليًا.");
   }
 
-  const team = state.teams[currentQuestion.teamIndex];
-  const opponentIndex = getOpponentTeamIndex(currentQuestion.teamIndex);
-  const opponentTeam = state.teams[opponentIndex];
-  const selectedKey = state.pendingAnswerKey;
-  const selectedOption = currentQuestion.question.options.find(
-    (option) => option.key === selectedKey
-  );
   const visibleOptions = currentQuestion.question.options.filter(
     (option) => !currentQuestion.removedOptionKeys.includes(option.key)
   );
-  const canUseRemoveTwo =
-    !team.abilities.removeTwo.used &&
-    !state.confirmAnswer &&
-    visibleOptions.length > 2 &&
-    currentQuestion.question.options.filter(
-      (option) =>
-        option.key !== currentQuestion.question.answerKey &&
-        !currentQuestion.removedOptionKeys.includes(option.key)
-    ).length > 1;
-  const canUseBlock = !opponentTeam.abilities.block.used && !state.confirmAnswer;
-  const displayedPoints = currentQuestion.question.points * currentQuestion.multiplier;
+  const canUseRemoveTwo = canUseRemoveTwoInCurrentQuestion();
+  const blockedPlayers = currentQuestion.blockedPlayerIds
+    .map((playerId) => getPlayerName(playerId))
+    .filter(Boolean);
 
   return `
     <section class="screen question-shell">
-      <div class="question-card" data-share-root style="border-color:${team.color}">
+      <div class="question-card" data-share-root>
         <div class="question-meta">
           <span class="pill">${escapeHtml(currentQuestion.categoryName)}</span>
-          <span class="pill">${escapeHtml(team.name)}</span>
-          <span class="pill">${formatNumber(displayedPoints)} نقطة</span>
-          ${
-            currentQuestion.multiplier > 1
-              ? `<span class="pill" style="color:${team.color};">دبل النقاط مفعّل</span>`
-              : ""
-          }
+          <span class="pill">${formatNumber(currentQuestion.question.points)} نقطة</span>
         </div>
         <h2 class="question-text">${escapeHtml(currentQuestion.question.text)}</h2>
 
-        <div class="question-tools">
+        ${
+          blockedPlayers.length
+            ? `<div class="helper-row" style="justify-content:center;">
+                <div class="pill">المحظورون في هذه الجولة: ${blockedPlayers
+                  .map((name) => escapeHtml(name))
+                  .join(" / ")}</div>
+              </div>`
+            : ""
+        }
+
+        <div class="question-tools no-capture">
           <div class="question-tool-group">
             <button
-              class="ability-icon ${team.abilities.removeTwo.used ? "used" : ""}"
+              class="ability-icon"
               type="button"
               title="حذف إجابتين"
               ${canUseRemoveTwo ? "" : "disabled"}
-              data-action="use-remove-two"
+              data-action="open-remove-two-picker"
             >
               ${ABILITY_META.removeTwo.icon}
             </button>
           </div>
-
-          ${
-            !opponentTeam.abilities.block.used
-              ? `
-                <div class="question-tool-group">
-                  <button
-                    class="ability-icon danger"
-                    type="button"
-                    title="بلوك"
-                    ${canUseBlock ? "" : "disabled"}
-                    data-action="use-block"
-                  >
-                    ${ABILITY_META.block.icon}
-                  </button>
-                </div>
-              `
-              : ""
-          }
         </div>
 
         <div class="options-list">
           ${visibleOptions
             .map(
               (option) => `
-                <button
-                  class="option-button ${selectedKey === option.key ? "selected" : ""}"
-                  type="button"
-                  data-action="select-option"
-                  data-option-key="${option.key}"
-                >
+                <div class="option-card">
                   <strong>(${displayOptionKey(option.key)})</strong>
                   ${escapeHtml(option.label)}
-                </button>
+                </div>
               `
             )
             .join("")}
@@ -697,31 +713,101 @@ function renderQuestionScreen() {
 
         <div class="btn-row no-capture" style="justify-content:center;">
           <button class="btn btn-secondary" data-action="share-current">إرسال</button>
+          <button class="btn btn-primary" data-action="go-answer-select">التالي</button>
         </div>
       </div>
 
-      ${
-        state.confirmAnswer && selectedOption
-          ? `
-            <div class="modal-backdrop">
-              <div class="modal-card">
-                <h3 style="margin-top:0;">تأكيد الإجابة</h3>
-                <p>
-                  هل تريد اعتماد هذه الإجابة للفريق <strong>${escapeHtml(team.name)}</strong>؟
-                </p>
-                <p style="margin-top:12px;">
-                  <strong>(${displayOptionKey(selectedOption.key)})</strong>
-                  ${escapeHtml(selectedOption.label)}
-                </p>
-                <div class="btn-row">
-                  <button class="btn btn-primary" data-action="confirm-answer">تأكيد</button>
-                  <button class="btn btn-ghost" data-action="cancel-confirm">إلغاء</button>
-                </div>
-              </div>
-            </div>
-          `
-          : ""
-      }
+      ${renderDialog()}
+    </section>
+  `;
+}
+
+function renderAnswerSelectScreen() {
+  const currentQuestion = state.currentQuestion;
+  if (!currentQuestion) {
+    return renderFallbackScreen("لا يوجد سؤال نشط حاليًا.");
+  }
+
+  const selectedResponderId = state.selectedResponderId;
+  const blockedPlayerIdSet = new Set(currentQuestion.blockedPlayerIds || []);
+  const selectedPlayer =
+    selectedResponderId && selectedResponderId !== "__none__"
+      ? state.teams.find((player) => player.id === selectedResponderId)
+      : null;
+
+  return `
+    <section class="screen question-shell">
+      <div class="question-card" data-share-root>
+        <div class="question-meta">
+          <span class="pill">${escapeHtml(currentQuestion.categoryName)}</span>
+          <span class="pill">${formatNumber(currentQuestion.question.points)} نقطة</span>
+        </div>
+
+        <h2 class="section-title" style="margin-bottom:14px;">الجواب الصحيح</h2>
+        <p class="question-text" style="font-size:2rem;">${escapeHtml(
+          currentQuestion.question.answerText
+        )}</p>
+
+        <div class="player-choice-grid">
+          ${state.teams
+            .map((player) =>
+              renderPlayerChoiceCard({
+                player,
+                selected: selectedResponderId === player.id,
+                disabled: blockedPlayerIdSet.has(player.id),
+                action: "select-responder",
+                subtitle: blockedPlayerIdSet.has(player.id)
+                  ? `ممنوع هذه الجولة بواسطة ${escapeHtml(
+                      getPlayerName(player.blockedByPlayerId) || "بلوك"
+                    )}`
+                  : player.abilities.double.pending
+                    ? "2× جاهز"
+                    : `${formatNumber(player.points)} نقطة`,
+              })
+            )
+            .join("")}
+
+          <button
+            class="choice-card add-choice-card"
+            data-action="open-add-player"
+            data-purpose="answer-select"
+          >
+            <strong>+</strong>
+            <span>لاعب جديد</span>
+          </button>
+
+          <button
+            class="choice-card no-one-card ${selectedResponderId === "__none__" ? "selected" : ""}"
+            data-action="select-no-one"
+          >
+            <strong>لا أحد</strong>
+            <span>بمعنى لم يجب أحد</span>
+          </button>
+        </div>
+
+        ${
+          selectedPlayer
+            ? `<div class="helper-row" style="justify-content:center;"><div class="pill" style="color:${selectedPlayer.color};">سيُسجل الجواب لصالح ${escapeHtml(
+                selectedPlayer.name
+              )}</div></div>`
+            : selectedResponderId === "__none__"
+              ? `<div class="helper-row" style="justify-content:center;"><div class="pill">سيُسجّل السؤال على أنه بلا مجيب</div></div>`
+              : ""
+        }
+
+        <div class="btn-row no-capture" style="justify-content:center;">
+          <button class="btn btn-secondary" data-action="share-current">إرسال</button>
+          <button
+            class="btn btn-primary"
+            data-action="confirm-responder"
+            ${selectedResponderId ? "" : "disabled"}
+          >
+            التالي
+          </button>
+        </div>
+      </div>
+
+      ${renderDialog()}
     </section>
   `;
 }
@@ -729,73 +815,81 @@ function renderQuestionScreen() {
 function renderAnswerScreen() {
   const result = state.lastResult;
   if (!result) {
-    return renderFallbackScreen("لم يتم العثور على نتيجة السؤال.");
+    return renderFallbackScreen("لم يتم العثور على نتيجة الجولة.");
   }
 
-  const team = state.teams[result.teamIndex];
-  const resultType = result.type || (result.isCorrect ? "correct" : "wrong");
-  const blockingTeam =
-    Number.isInteger(result.blockingTeamIndex) && state.teams[result.blockingTeamIndex]
-      ? state.teams[result.blockingTeamIndex]
-      : null;
+  const player = result.playerId ? getPlayerById(result.playerId) : null;
+  const actorPlayer = result.actorPlayerId ? getPlayerById(result.actorPlayerId) : null;
+  const targetPlayer = result.targetPlayerId ? getPlayerById(result.targetPlayerId) : null;
+  const resultType = result.type;
+  const scoreClass =
+    resultType === "correct" ? "success" : resultType === "blockNotice" ? "blocked" : "fail";
   const emoji =
-    resultType === "correct" ? "🥳" : resultType === "wrong" ? "😔" : "⛔";
+    resultType === "correct" ? "🥳" : resultType === "blockNotice" ? "⛔" : "😔";
+  const borderColor = player?.color || actorPlayer?.color || "#ff6b6b";
   const title =
     resultType === "correct"
       ? "إجابة صحيحة"
-      : resultType === "wrong"
-        ? "إجابة غير صحيحة"
-        : "تم استخدام البلوك";
+      : resultType === "blockNotice"
+        ? "تم تفعيل البلوك"
+        : "لم يجيب أحد";
   const subtitle =
     resultType === "correct"
-      ? `${team.name} أحرز نقاط هذا السؤال.`
-      : resultType === "wrong"
-        ? `${team.name} خسر نقاط هذا السؤال بسبب الإجابة الخاطئة.`
-        : `${blockingTeam?.name || "فريق الخصم"} منع ${team.name} من الإجابة، وتم إطفاء السؤال.`;
-  const scoreClass =
-    resultType === "correct" ? "success" : resultType === "wrong" ? "fail" : "blocked";
+      ? `الجواب الصحيح لصالح ${player?.name || "اللاعب"}.`
+      : resultType === "blockNotice"
+        ? `تم عمل بلوك للاعب ${targetPlayer?.name || ""} من قبل ${actorPlayer?.name || ""} للجولة القادمة.`
+        : "انتهى هذا السؤال بدون مجيب.";
 
   return `
     <section class="screen result-shell">
-      <div class="result-card ${scoreClass}" data-share-root style="border-color:${team.color}">
+      <div class="result-card ${scoreClass}" data-share-root style="border-color:${borderColor}">
         <div class="emoji">${emoji}</div>
-        <h2 class="section-title">${title}</h2>
+        <h2 class="section-title">${escapeHtml(title)}</h2>
         <p class="section-subtitle">${escapeHtml(subtitle)}</p>
 
-        <div class="score-big ${scoreClass}">
-          ${formatSignedNumber(result.scoreDelta)}
-        </div>
+        ${
+          resultType === "correct"
+            ? `
+              <div class="score-big success">${formatSignedNumber(result.scoreDelta)}</div>
+              ${
+                result.usedDouble
+                  ? `<div class="helper-row" style="justify-content:center;"><div class="pill" style="color:${player?.color || "#ffd166"};">تم تطبيق دبل النقاط ×2</div></div>`
+                  : ""
+              }
+            `
+            : resultType === "blockNotice"
+              ? `<div class="score-big blocked">⛔</div>`
+              : `<div class="score-big fail">0</div>`
+        }
 
         <div class="answer-grid">
           <div class="answer-stat">
-            <strong>${escapeHtml(result.categoryName)}</strong>
-            <span>التصنيف</span>
+            <strong>${escapeHtml(result.categoryName || "الجولة القادمة")}</strong>
+            <span>${resultType === "blockNotice" ? "الحالة" : "التصنيف"}</span>
           </div>
           <div class="answer-stat">
-            <strong>${
-              resultType === "blocked"
-                ? escapeHtml(blockingTeam?.name || "")
-                : escapeHtml(result.correctAnswer)
-            }</strong>
-            <span>${resultType === "blocked" ? "الفريق الذي فعّل البلوك" : "الإجابة الصحيحة"}</span>
+            <strong>${escapeHtml(
+              resultType === "blockNotice" ? actorPlayer?.name || "" : result.correctAnswer || ""
+            )}</strong>
+            <span>${resultType === "blockNotice" ? "من فعّل البلوك" : "الإجابة الصحيحة"}</span>
           </div>
           <div class="answer-stat">
-            <strong>${
-              resultType === "blocked"
-                ? result.usedDouble
-                  ? "دبل النقاط احترق"
-                  : "السؤال أُغلق"
-                : escapeHtml(result.selectedAnswer)
-            }</strong>
-            <span>${resultType === "blocked" ? "حالة السؤال" : "الإجابة المختارة"}</span>
+            <strong>${escapeHtml(
+              resultType === "correct"
+                ? player?.name || ""
+                : resultType === "blockNotice"
+                  ? targetPlayer?.name || ""
+                  : "لا أحد"
+            )}</strong>
+            <span>${
+              resultType === "correct"
+                ? "صاحب الجواب"
+                : resultType === "blockNotice"
+                  ? "اللاعب المحظور"
+                  : "حالة السؤال"
+            }</span>
           </div>
         </div>
-
-        ${
-          result.usedDouble
-            ? `<div class="helper-row" style="justify-content:center;"><div class="pill" style="color:${team.color};">تم تطبيق دبل النقاط ×2</div></div>`
-            : ""
-        }
 
         <div class="btn-row no-capture" style="justify-content:center;">
           <button class="btn btn-secondary" data-action="share-current">إرسال</button>
@@ -807,41 +901,37 @@ function renderAnswerScreen() {
 }
 
 function renderWinnerScreen() {
-  const teams = [...state.teams].sort((left, right) => right.points - left.points);
-  const [winner, loser] = teams;
-  const isTie = winner && loser && winner.points === loser.points;
+  const players = [...state.teams].sort((left, right) => right.points - left.points);
+  const [winner, runnerUp] = players;
+  const isTie = winner && runnerUp && winner.points === runnerUp.points;
 
   return `
     <section class="screen winner-shell">
       <div class="winner-card" data-share-root style="border-color:${winner?.color || "#ffd166"}">
         <div class="winner-crown">${isTie ? "🤝" : "👑"}</div>
-        <h2 class="section-title">${isTie ? "انتهت المباراة بالتعادل" : "الفريق الفائز"}</h2>
+        <h2 class="section-title">${isTie ? "انتهت اللعبة بالتعادل" : "اللاعب الفائز"}</h2>
         <h3 class="winner-name" style="color:${winner?.color || "#ffd166"};">
-          ${escapeHtml(isTie ? "تعادل الفريقان" : winner?.name || "")}
+          ${escapeHtml(isTie ? "تعادل اللاعبون" : winner?.name || "")}
         </h3>
         <p class="winner-points">
           ${
             isTie
-              ? `كل فريق أنهى المباراة بـ ${formatNumber(winner?.points || 0)} نقطة`
+              ? `أعلى نتيجة كانت ${formatNumber(winner?.points || 0)} نقطة`
               : `${escapeHtml(winner?.name || "")} جمع ${formatNumber(winner?.points || 0)} نقطة`
           }
         </p>
 
         <div class="winner-grid">
-          <div class="winner-badge">
-            <h3 style="margin-top:0;color:${winner?.color || "#ffd166"};">${
-              escapeHtml(winner?.name || "")
-            }</h3>
-            <p style="margin:0;color:var(--muted);">
-              ${formatNumber(winner?.points || 0)} نقطة
-            </p>
-          </div>
-          <div class="loser-card">
-            <h3 style="margin-top:0;color:${loser?.color || "#ff8a8a"};">${
-              escapeHtml(loser?.name || "")
-            }</h3>
-            <p style="margin:0;">${formatNumber(loser?.points || 0)} نقطة</p>
-          </div>
+          ${players
+            .map(
+              (player) => `
+                <div class="${player.id === winner?.id && !isTie ? "winner-badge" : "loser-card"}" style="border-color:${player.color};">
+                  <h3 style="margin-top:0;color:${player.color};">${escapeHtml(player.name)}</h3>
+                  <p style="margin:0;">${formatNumber(player.points)} نقطة</p>
+                </div>
+              `
+            )
+            .join("")}
         </div>
 
         <div class="btn-row no-capture" style="justify-content:center;">
@@ -867,63 +957,67 @@ function renderFallbackScreen(message) {
   `;
 }
 
-function renderScorePanel(team, teamIndex, isActive) {
-  const turnLabel =
-    state.activeTeamIndex === null
-      ? "بانتظار تحديد الفريق الذي يبدأ"
-      : isActive
-        ? "هذا هو الدور الحالي"
-        : "بانتظار الدور التالي";
-  const canUseDouble =
-    (!team.abilities.double.used || team.abilities.double.pending) &&
-    (state.activeTeamIndex === null || state.activeTeamIndex === teamIndex);
+function renderPlayerBoardCard(player) {
+  const canToggleDouble = !player.abilities.double.used || player.abilities.double.pending;
+  const canUseBlock = !player.abilities.block.used && state.phase === "board";
+  const blockedByName = getPlayerName(player.blockedByPlayerId);
+  const contrastColor = getContrastTextColor(player.color);
 
   return `
-    <aside
-      class="score-panel team-slot-${teamIndex} ${isActive ? "active" : ""}"
-      style="--team-color:${team.color};border-color:${team.color}33;"
+    <article
+      class="player-score-card"
+      style="--player-color:${escapeHtmlAttribute(player.color)};--player-text:${escapeHtmlAttribute(
+        contrastColor
+      )};"
     >
-      <div class="team-mark">${escapeHtml(team.name)}</div>
-      <div class="points-value">${formatNumber(team.points)}</div>
-      <div class="turn-badge">${escapeHtml(turnLabel)}</div>
-      <div class="team-abilities">
+      <div class="player-score-name">${escapeHtml(player.name)}</div>
+      <div class="player-score-points">${formatNumber(player.points)}</div>
+      <div class="player-score-badges">
+        ${
+          player.abilities.double.pending
+            ? `<span class="mini-badge">2× جاهز</span>`
+            : ""
+        }
+        ${
+          blockedByName
+            ? `<span class="mini-badge danger">بلوك من ${escapeHtml(blockedByName)}</span>`
+            : ""
+        }
+      </div>
+      <div class="player-card-abilities no-capture">
         ${renderAbilityButton({
           icon: ABILITY_META.double.icon,
           label: ABILITY_META.double.label,
-          action: canUseDouble ? "activate-double" : "",
-          dataAttributes: `data-team-index="${teamIndex}"`,
-          used: team.abilities.double.used && !team.abilities.double.pending,
-          active: team.abilities.double.pending,
-          disabled: !canUseDouble,
-          title: team.abilities.double.pending
-            ? "سيتم تطبيق الدبل على السؤال التالي"
-            : ABILITY_META.double.label,
+          action: canToggleDouble ? "activate-double" : "",
+          dataAttributes: `data-player-id="${escapeHtmlAttribute(player.id)}"`,
+          used: player.abilities.double.used && !player.abilities.double.pending,
+          active: player.abilities.double.pending,
+          disabled: !canToggleDouble,
+          title: player.abilities.double.pending
+            ? "اضغط مرة أخرى لإلغاء الدبل"
+            : "تفعيل دبل النقاط لهذا اللاعب",
         })}
         ${renderAbilityButton({
           icon: ABILITY_META.removeTwo.icon,
           label: ABILITY_META.removeTwo.label,
           action: "ability-hint",
-          dataAttributes: `data-message="ميزة حذف إجابتين تُستخدم من داخل صفحة السؤال."`,
-          used: team.abilities.removeTwo.used,
+          dataAttributes:
+            'data-message="حذف إجابتين يتم تفعيله من داخل السؤال ثم تختار اللاعب المستخدم."',
+          used: player.abilities.removeTwo.used,
           disabled: false,
           title: ABILITY_META.removeTwo.label,
         })}
         ${renderAbilityButton({
           icon: ABILITY_META.block.icon,
           label: ABILITY_META.block.label,
-          action: "ability-hint",
-          dataAttributes: `data-message="ميزة البلوك تُستخدم من داخل صفحة السؤال."`,
-          used: team.abilities.block.used,
-          disabled: false,
-          title: ABILITY_META.block.label,
+          action: canUseBlock ? "open-block-picker" : "",
+          dataAttributes: `data-player-id="${escapeHtmlAttribute(player.id)}"`,
+          used: player.abilities.block.used,
+          disabled: !canUseBlock,
+          title: "اختر لاعبًا سيتم عمل بلوك له في الجولة القادمة",
         })}
       </div>
-      ${
-        team.abilities.double.pending
-          ? `<div class="ability-note">2× جاهز للسؤال التالي</div>`
-          : ""
-      }
-    </aside>
+    </article>
   `;
 }
 
@@ -938,11 +1032,7 @@ function renderAbilityButton({
   title = "",
 }) {
   const actionAttr = action ? `data-action="${action}"` : "";
-  const classes = [
-    "ability-icon",
-    used ? "used" : "",
-    active ? "active" : "",
-  ]
+  const classes = ["ability-icon", used ? "used" : "", active ? "active" : ""]
     .filter(Boolean)
     .join(" ");
 
@@ -954,7 +1044,7 @@ function renderAbilityButton({
       title="${escapeHtmlAttribute(title || label)}"
       ${actionAttr}
       ${dataAttributes}
-      ${disabled || used ? "disabled" : ""}
+      ${disabled || (used && !active) ? "disabled" : ""}
     >
       ${icon}
     </button>
@@ -969,63 +1059,186 @@ function renderBoardCard(card) {
         <span>${formatNumber(countCardAvailableQuestions(card))} أسئلة جاهزة</span>
       </div>
       <h3 class="card-title">${escapeHtml(card.name)}</h3>
-      <div class="category-rails">
-        <div class="stack">
-          ${POINT_VALUES.map((pointValue) =>
-            renderPointButton(card, "left", pointValue)
-          ).join("")}
-        </div>
-
-        <div class="card-core">
-          <div aria-hidden="true"></div>
-        </div>
-
-        <div class="stack">
-          ${POINT_VALUES.map((pointValue) =>
-            renderPointButton(card, "right", pointValue)
-          ).join("")}
-        </div>
+      <div class="single-stack">
+        ${POINT_VALUES.map((pointValue) => renderPointButton(card, pointValue)).join("")}
       </div>
     </article>
   `;
 }
 
-function renderPointButton(card, side, pointValue) {
-  const slot = card.slots[side][pointValue];
-  const teamIndex = side === "left" ? 0 : 1;
-  const team = state.teams[teamIndex];
-  const isLockedByTurn =
-    Number.isInteger(state.activeTeamIndex) && state.activeTeamIndex !== teamIndex;
-  const disabled = !slot || slot.used || slot.unavailable || isLockedByTurn;
+function renderPointButton(card, pointValue) {
+  const slot = card.slots?.[pointValue];
+  const answeredPlayer = slot?.answeredByPlayerId
+    ? getPlayerById(slot.answeredByPlayerId)
+    : null;
+  const disabled = !slot || slot.used || slot.unavailable;
+  const buttonColor = answeredPlayer?.color || (slot?.noAnswer ? "#b85d5d" : "#d7e1ef");
+  const textColor = answeredPlayer
+    ? getContrastTextColor(answeredPlayer.color)
+    : slot?.noAnswer
+      ? "#ffffff"
+      : "#243247";
   const classes = [
     "point-button",
-    slot?.used ? "used" : "",
+    "single",
+    slot?.used && answeredPlayer ? "answered" : "",
+    slot?.used && slot?.noAnswer ? "no-answer" : "",
     slot?.unavailable ? "unavailable" : "",
-    isLockedByTurn && !slot?.used && !slot?.unavailable ? "turn-locked" : "",
   ]
     .filter(Boolean)
     .join(" ");
-  const title = slot?.used
-    ? "تم استخدام هذا السؤال"
-    : slot?.unavailable
-      ? "لا يوجد سؤال متاح لهذه الخانة"
-      : isLockedByTurn
-        ? `الدور الآن على ${state.teams[state.activeTeamIndex].name}`
-        : team.name;
+  const title = answeredPlayer
+    ? `تم تسجيل هذا السؤال لصالح ${answeredPlayer.name}`
+    : slot?.noAnswer
+      ? "انتهى هذا السؤال بدون مجيب"
+      : slot?.unavailable
+        ? "لا يوجد سؤال متاح لهذه القيمة"
+        : "افتح السؤال";
 
   return `
     <button
       class="${classes}"
-      style="--team-color:${team.color};"
+      style="--button-color:${escapeHtmlAttribute(buttonColor)};--button-text:${escapeHtmlAttribute(
+        textColor
+      )};"
       ${disabled ? "disabled" : ""}
       data-action="launch-slot"
       data-category-id="${escapeHtmlAttribute(card.categoryId)}"
-      data-side="${side}"
       data-point-value="${pointValue}"
       title="${escapeHtmlAttribute(title)}"
     >
       ${formatNumber(pointValue)}
     </button>
+  `;
+}
+
+function renderPlayerChoiceCard({ player, selected, disabled, action, subtitle = "" }) {
+  const contrastColor = getContrastTextColor(player.color);
+
+  return `
+    <button
+      class="choice-card player-choice-card ${selected ? "selected" : ""}"
+      style="--player-color:${escapeHtmlAttribute(player.color)};--player-text:${escapeHtmlAttribute(
+        contrastColor
+      )};"
+      ${disabled ? "disabled" : ""}
+      data-action="${action}"
+      data-player-id="${escapeHtmlAttribute(player.id)}"
+    >
+      <strong>${escapeHtml(player.name)}</strong>
+      <span>${subtitle}</span>
+    </button>
+  `;
+}
+
+function renderDialog() {
+  if (!state.dialog) {
+    return "";
+  }
+
+  if (state.dialog.type === "pick-player") {
+    return renderPickPlayerDialog();
+  }
+
+  if (state.dialog.type === "add-player") {
+    return renderAddPlayerDialog();
+  }
+
+  return "";
+}
+
+function renderPickPlayerDialog() {
+  const dialog = state.dialog;
+  if (!dialog || dialog.type !== "pick-player") {
+    return "";
+  }
+
+  const actor = dialog.actorPlayerId ? getPlayerById(dialog.actorPlayerId) : null;
+  const players =
+    dialog.purpose === "remove-two"
+      ? state.teams.filter((player) => !player.abilities.removeTwo.used)
+      : state.teams.filter(
+          (player) => player.id !== dialog.actorPlayerId && !player.blockedByPlayerId
+        );
+  const title =
+    dialog.purpose === "remove-two"
+      ? "من سيستخدم حذف إجابتين؟"
+      : `من اللاعب الذي سيتم عمل بلوك له بواسطة ${actor?.name || "هذا اللاعب"}؟`;
+  const subtitle =
+    dialog.purpose === "remove-two"
+      ? "سيُستهلك حذف إجابتين لهذا اللاعب."
+      : "هذا اللاعب سيكون محظورًا في اختيار صاحب الجواب للجولة القادمة.";
+
+  return `
+    <div class="modal-backdrop">
+      <div class="modal-card">
+        <h3 style="margin-top:0;">${escapeHtml(title)}</h3>
+        <p>${escapeHtml(subtitle)}</p>
+        <div class="player-choice-grid compact">
+          ${players
+            .map((player) =>
+              renderPlayerChoiceCard({
+                player,
+                selected: false,
+                disabled: false,
+                action: "pick-dialog-player",
+                subtitle:
+                  dialog.purpose === "remove-two"
+                    ? "سيُستهلك الحذف لهذا اللاعب"
+                    : `${formatNumber(player.points)} نقطة`,
+              })
+            )
+            .join("")}
+
+          ${
+            dialog.purpose === "remove-two"
+              ? `<button class="choice-card add-choice-card" data-action="open-add-player" data-purpose="remove-two">
+                  <strong>+</strong>
+                  <span>لاعب جديد</span>
+                </button>`
+              : ""
+          }
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-ghost" data-action="close-dialog">إغلاق</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderAddPlayerDialog() {
+  const dialog = state.dialog;
+  const defaultColor = getNextAvailableColor();
+
+  return `
+    <div class="modal-backdrop">
+      <div class="modal-card">
+        <h3 style="margin-top:0;">إضافة لاعب جديد</h3>
+        <p>اكتب اسم اللاعب واختر لونًا مختلفًا عن بقية اللاعبين.</p>
+        <form id="add-player-form">
+          <input type="hidden" name="purpose" value="${escapeHtmlAttribute(dialog?.purpose || "")}" />
+          <input
+            type="text"
+            name="player_name"
+            placeholder="اسم اللاعب"
+            maxlength="30"
+            required
+            style="width:100%;margin-top:16px;border-radius:16px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);color:var(--text);padding:14px 16px;font:inherit;"
+          />
+          <input
+            type="color"
+            name="player_color"
+            value="${escapeHtmlAttribute(defaultColor)}"
+            style="width:100%;margin-top:16px;height:56px;border-radius:16px;border:1px solid rgba(255,255,255,0.1);background:transparent;padding:8px;"
+          />
+          <div class="btn-row">
+            <button class="btn btn-primary" type="submit">إضافة</button>
+            <button class="btn btn-ghost" type="button" data-action="close-dialog">إلغاء</button>
+          </div>
+        </form>
+      </div>
+    </div>
   `;
 }
 
@@ -1069,7 +1282,7 @@ function onAppClick(event) {
       );
       break;
     case "activate-double":
-      activateDoubleForTeam(Number(actionElement.dataset.teamIndex));
+      activateDoubleForPlayer(actionElement.dataset.playerId || "");
       break;
     case "ability-hint":
       showToast(actionElement.dataset.message || "تُستخدم هذه الميزة في موضع مختلف.");
@@ -1077,27 +1290,35 @@ function onAppClick(event) {
     case "launch-slot":
       openQuestion(
         actionElement.dataset.categoryId || "",
-        actionElement.dataset.side || "",
         Number(actionElement.dataset.pointValue)
       );
       break;
-    case "use-remove-two":
-      useRemoveTwo();
+    case "open-remove-two-picker":
+      openRemoveTwoPicker();
       break;
-    case "use-block":
-      useBlock();
+    case "open-block-picker":
+      openBlockPicker(actionElement.dataset.playerId || "");
       break;
-    case "select-option":
-      selectOption(actionElement.dataset.optionKey || "");
+    case "pick-dialog-player":
+      handleDialogPlayerPick(actionElement.dataset.playerId || "");
       break;
-    case "cancel-confirm":
-      commit({
-        ...state,
-        confirmAnswer: false,
-      });
+    case "open-add-player":
+      openAddPlayer(actionElement.dataset.purpose || "");
       break;
-    case "confirm-answer":
-      evaluateAnswer();
+    case "close-dialog":
+      closeDialog();
+      break;
+    case "go-answer-select":
+      goToAnswerSelect();
+      break;
+    case "select-responder":
+      selectResponder(actionElement.dataset.playerId || "");
+      break;
+    case "select-no-one":
+      selectResponder("__none__");
+      break;
+    case "confirm-responder":
+      confirmResponder();
       break;
     case "next-after-answer":
       moveAfterAnswer();
@@ -1128,8 +1349,7 @@ function onAppChange(event) {
   }
 
   if (target.dataset.teamNameIndex) {
-    const teamIndex = Number(target.dataset.teamNameIndex);
-    syncTeamName(teamIndex, target.value, true);
+    syncTeamName(Number(target.dataset.teamNameIndex), target.value, true);
   }
 }
 
@@ -1143,12 +1363,16 @@ function onAppInput(event) {
 }
 
 function onAppSubmit(event) {
-  if (event.target.id !== "teams-form") {
+  if (event.target.id === "teams-form") {
+    event.preventDefault();
+    finalizeTeamsAndStartBoard();
     return;
   }
 
-  event.preventDefault();
-  finalizeTeamsAndStartBoard();
+  if (event.target.id === "add-player-form") {
+    event.preventDefault();
+    handleAddPlayerSubmit(event.target);
+  }
 }
 
 function startFlow() {
@@ -1226,7 +1450,7 @@ function goToTeamSetup() {
 }
 
 function pickTeamColor(teamIndex, color) {
-  if (!TEAM_COLORS.includes(color)) {
+  if (!color) {
     return;
   }
 
@@ -1258,20 +1482,20 @@ function syncTeamName(teamIndex, value, shouldRender) {
 
 function finalizeTeamsAndStartBoard() {
   const cleanedDraft = state.teamDraft.map((team, index) => ({
-    name: (team.name || "").trim() || `الفريق ${index + 1}`,
-    color: team.color,
+    name: (team.name || "").trim() || `لاعب ${index + 1}`,
+    color: normalizeColorHex(team.color) || TEAM_COLORS[index % TEAM_COLORS.length],
   }));
 
   const uniqueNames = new Set(cleanedDraft.map((team) => normalizeLooseText(team.name)));
-  const uniqueColors = new Set(cleanedDraft.map((team) => team.color));
+  const uniqueColors = new Set(cleanedDraft.map((team) => normalizeColorHex(team.color)));
 
   if (uniqueNames.size < cleanedDraft.length) {
-    showToast("اختر اسمين مختلفين للفريقين.");
+    showToast("اختر اسمين مختلفين للاعبين.");
     return;
   }
 
   if (uniqueColors.size < cleanedDraft.length) {
-    showToast("اختر لونين مختلفين للفريقين.");
+    showToast("اختر لونين مختلفين للاعبين.");
     return;
   }
 
@@ -1284,12 +1508,12 @@ function finalizeTeamsAndStartBoard() {
   commit({
     ...state,
     phase: "board",
-    teams: cleanedDraft.map((team, index) => createTeamState(team, index)),
+    teamDraft: cleanedDraft,
+    teams: cleanedDraft.map((team, index) => createDraftPlayer(team, index)),
     board,
-    activeTeamIndex: null,
     currentQuestion: null,
-    pendingAnswerKey: "",
-    confirmAnswer: false,
+    selectedResponderId: "",
+    dialog: null,
     lastResult: null,
   });
 }
@@ -1301,29 +1525,18 @@ function buildBoard(selectedCategoryIds) {
   );
 
   return categories.map((category) => {
-    const pointPools = {};
+    const slots = {};
+
     POINT_VALUES.forEach((pointValue) => {
       const availableQuestions = (category.questionsByPoints[String(pointValue)] || []).filter(
         (question) => !usedQuestionIdSet.has(question.id)
       );
-      pointPools[pointValue] = getRandomizedQuestionPool(
+      const questionPool = getRandomizedQuestionPool(
         availableQuestions,
         state.fileSignature,
         `${category.id}:${pointValue}`
       );
-    });
-
-    const slots = {
-      left: {},
-      right: {},
-    };
-
-    POINT_VALUES.forEach((pointValue) => {
-      const leftQuestion = pointPools[pointValue].shift() || null;
-      const rightQuestion = pointPools[pointValue].shift() || null;
-
-      slots.left[pointValue] = createSlot(leftQuestion, 0, "left", pointValue);
-      slots.right[pointValue] = createSlot(rightQuestion, 1, "right", pointValue);
+      slots[pointValue] = createSlot(questionPool.shift() || null, pointValue);
     });
 
     return {
@@ -1334,20 +1547,20 @@ function buildBoard(selectedCategoryIds) {
   });
 }
 
-function createSlot(question, teamIndex, side, pointValue) {
+function createSlot(question, pointValue) {
   return {
-    id: `${side}-${pointValue}-${question?.id || `empty-${teamIndex}-${pointValue}`}`,
-    teamIndex,
-    side,
+    id: `slot-${pointValue}-${question?.id || `empty-${pointValue}`}`,
     pointValue,
     used: false,
     unavailable: !question,
     question,
+    answeredByPlayerId: "",
+    noAnswer: false,
   };
 }
 
-function openQuestion(categoryId, side, pointValue) {
-  if (!categoryId || !side || !POINT_VALUES.includes(pointValue)) {
+function openQuestion(categoryId, pointValue) {
+  if (!categoryId || !POINT_VALUES.includes(pointValue)) {
     return;
   }
 
@@ -1356,109 +1569,174 @@ function openQuestion(categoryId, side, pointValue) {
     return;
   }
 
-  const slot = boardCard.slots?.[side]?.[pointValue];
-  const teamIndex = side === "left" ? 0 : 1;
-
-  if (!slot || slot.used || slot.unavailable) {
+  const slot = boardCard.slots?.[pointValue];
+  if (!slot || slot.used || slot.unavailable || !slot.question) {
     return;
   }
-
-  if (Number.isInteger(state.activeTeamIndex) && state.activeTeamIndex !== teamIndex) {
-    showToast(`الدور الآن على ${state.teams[state.activeTeamIndex].name}.`);
-    return;
-  }
-
-  const answeringTeam = state.teams[teamIndex];
-  const multiplier = answeringTeam.abilities.double.pending ? 2 : 1;
-  const updatedTeams = state.teams.map((team, index) =>
-    index === teamIndex
-      ? {
-          ...team,
-          abilities: {
-            ...team.abilities,
-            double: {
-              ...team.abilities.double,
-              pending: false,
-            },
-          },
-        }
-      : team
-  );
 
   commit({
     ...state,
     phase: "question",
-    teams: updatedTeams,
     currentQuestion: {
       categoryId,
-      side,
       pointValue,
-      teamIndex,
       categoryName: boardCard.name,
       question: slot.question,
-      multiplier,
       removedOptionKeys: [],
+      blockedPlayerIds: getBlockedPlayerIds(state.teams),
     },
-    pendingAnswerKey: "",
-    confirmAnswer: false,
+    selectedResponderId: "",
+    dialog: null,
+    lastResult: null,
   });
 }
 
-function selectOption(optionKey) {
+function goToAnswerSelect() {
   if (!state.currentQuestion) {
-    return;
-  }
-
-  if (state.currentQuestion.removedOptionKeys.includes(optionKey)) {
-    return;
-  }
-
-  const selectedOption = state.currentQuestion.question.options.find(
-    (option) => option.key === optionKey
-  );
-  if (!selectedOption) {
     return;
   }
 
   commit({
     ...state,
-    pendingAnswerKey: optionKey,
-    confirmAnswer: true,
+    phase: "answer-select",
+    selectedResponderId: "",
+    dialog: null,
   });
 }
 
-function activateDoubleForTeam(teamIndex) {
-  if (teamIndex < 0 || teamIndex > 1) {
+function selectResponder(playerId) {
+  if (!state.currentQuestion) {
     return;
   }
 
-  const team = state.teams[teamIndex];
-  if (!team) {
+  if (playerId !== "__none__") {
+    const player = getPlayerById(playerId);
+    if (!player) {
+      return;
+    }
+
+    if ((state.currentQuestion.blockedPlayerIds || []).includes(playerId)) {
+      showToast(`لا يمكن اختيار ${player.name} في هذه الجولة بسبب البلوك.`);
+      return;
+    }
+  }
+
+  commit({
+    ...state,
+    selectedResponderId: playerId,
+  });
+}
+
+function confirmResponder() {
+  const currentQuestion = state.currentQuestion;
+  if (!currentQuestion || !state.selectedResponderId) {
+    showToast("اختر اللاعب الذي أجاب أو اختر لا أحد.");
     return;
   }
 
-  if (Number.isInteger(state.activeTeamIndex) && state.activeTeamIndex !== teamIndex) {
-    showToast(`الدور الآن على ${state.teams[state.activeTeamIndex].name}.`);
+  const blockedPlayerIds = currentQuestion.blockedPlayerIds || [];
+  const clearedTeams = clearRoundBlocks(state.teams, blockedPlayerIds);
+  const updatedSessionUsedQuestionIds = appendSessionQuestionId(
+    currentQuestion.question.id,
+    state.sessionUsedQuestionIds
+  );
+
+  if (state.selectedResponderId === "__none__") {
+    commit({
+      ...state,
+      phase: "answer",
+      teams: clearedTeams,
+      board: markBoardSlotResolved(state.board, currentQuestion.categoryId, currentQuestion.pointValue, {
+        noAnswer: true,
+      }),
+      currentQuestion: null,
+      selectedResponderId: "",
+      dialog: null,
+      sessionUsedQuestionIds: updatedSessionUsedQuestionIds,
+      lastResult: {
+        type: "nobody",
+        categoryName: currentQuestion.categoryName,
+        correctAnswer: currentQuestion.question.answerText,
+        scoreDelta: 0,
+      },
+    });
     return;
   }
 
-  if (team.abilities.double.used && !team.abilities.double.pending) {
+  const playerIndex = clearedTeams.findIndex((player) => player.id === state.selectedResponderId);
+  if (playerIndex === -1) {
+    showToast("تعذر العثور على اللاعب المختار.");
     return;
   }
 
-  const updatedTeams = state.teams.map((currentTeam, index) =>
-    index === teamIndex
+  const player = clearedTeams[playerIndex];
+  const usedDouble = player.abilities.double.pending;
+  const scoreDelta = currentQuestion.question.points * (usedDouble ? 2 : 1);
+  const updatedTeams = clearedTeams.map((currentPlayer, index) =>
+    index === playerIndex
       ? {
-          ...currentTeam,
+          ...currentPlayer,
+          points: currentPlayer.points + scoreDelta,
           abilities: {
-            ...currentTeam.abilities,
+            ...currentPlayer.abilities,
             double: {
-              used: !currentTeam.abilities.double.pending,
-              pending: !currentTeam.abilities.double.pending,
+              used: currentPlayer.abilities.double.used || usedDouble,
+              pending: false,
             },
           },
         }
-      : currentTeam
+      : currentPlayer
+  );
+
+  commit({
+    ...state,
+    phase: "answer",
+    teams: updatedTeams,
+    board: markBoardSlotResolved(state.board, currentQuestion.categoryId, currentQuestion.pointValue, {
+      answeredByPlayerId: player.id,
+    }),
+    currentQuestion: null,
+    selectedResponderId: "",
+    dialog: null,
+    sessionUsedQuestionIds: updatedSessionUsedQuestionIds,
+    lastResult: {
+      type: "correct",
+      playerId: player.id,
+      categoryName: currentQuestion.categoryName,
+      correctAnswer: currentQuestion.question.answerText,
+      scoreDelta,
+      usedDouble,
+    },
+  });
+}
+
+function activateDoubleForPlayer(playerId) {
+  if (state.phase !== "board") {
+    return;
+  }
+
+  const player = getPlayerById(playerId);
+  if (!player) {
+    return;
+  }
+
+  if (player.abilities.double.used && !player.abilities.double.pending) {
+    return;
+  }
+
+  const updatedTeams = state.teams.map((currentPlayer) =>
+    currentPlayer.id === playerId
+      ? {
+          ...currentPlayer,
+          abilities: {
+            ...currentPlayer.abilities,
+            double: {
+              ...currentPlayer.abilities.double,
+              pending: !currentPlayer.abilities.double.pending,
+            },
+          },
+        }
+      : currentPlayer
   );
 
   commit({
@@ -1467,26 +1745,106 @@ function activateDoubleForTeam(teamIndex) {
   });
 
   showToast(
-    team.abilities.double.pending
-      ? `تم إلغاء دبل النقاط لـ ${team.name}.`
-      : `تم تفعيل دبل النقاط لـ ${team.name}.`
+    player.abilities.double.pending
+      ? `تم إلغاء دبل النقاط لـ ${player.name}.`
+      : `تم تفعيل دبل النقاط لـ ${player.name}.`
   );
 }
 
-function useRemoveTwo() {
-  const currentQuestion = state.currentQuestion;
+function openRemoveTwoPicker() {
+  if (!state.currentQuestion) {
+    return;
+  }
+
+  if (!canUseRemoveTwoInCurrentQuestion()) {
+    showToast("لا يمكن استخدام حذف إجابتين في هذا السؤال.");
+    return;
+  }
+
+  commit({
+    ...state,
+    dialog: {
+      type: "pick-player",
+      purpose: "remove-two",
+    },
+  });
+}
+
+function openBlockPicker(actorPlayerId) {
+  if (state.phase !== "board") {
+    return;
+  }
+
+  const actorPlayer = getPlayerById(actorPlayerId);
+  if (!actorPlayer || actorPlayer.abilities.block.used) {
+    return;
+  }
+
+  const eligibleTargets = state.teams.filter(
+    (player) => player.id !== actorPlayerId && !player.blockedByPlayerId
+  );
+  if (!eligibleTargets.length) {
+    showToast("لا يوجد لاعب صالح لعمل البلوك عليه الآن.");
+    return;
+  }
+
+  commit({
+    ...state,
+    dialog: {
+      type: "pick-player",
+      purpose: "block",
+      actorPlayerId,
+    },
+  });
+}
+
+function handleDialogPlayerPick(playerId) {
+  const dialog = state.dialog;
+  if (!dialog || dialog.type !== "pick-player" || !playerId) {
+    return;
+  }
+
+  if (dialog.purpose === "remove-two") {
+    applyRemoveTwoForPlayer(playerId);
+    return;
+  }
+
+  if (dialog.purpose === "block") {
+    applyBlock(actorPlayerIdSafe(dialog.actorPlayerId), playerId);
+  }
+}
+
+function actorPlayerIdSafe(playerId) {
+  return typeof playerId === "string" ? playerId : "";
+}
+
+function applyRemoveTwoForPlayer(playerId) {
+  const nextState = buildRemoveTwoState(state, playerId);
+  if (!nextState) {
+    return;
+  }
+
+  const player = getPlayerById(playerId, nextState.teams);
+  commit(nextState);
+  showToast(`تم حذف إجابتين لصالح ${player?.name || "اللاعب"}.`);
+}
+
+function buildRemoveTwoState(baseState, playerId) {
+  const currentQuestion = baseState.currentQuestion;
   if (!currentQuestion) {
-    return;
+    return null;
   }
 
-  const team = state.teams[currentQuestion.teamIndex];
-  if (team.abilities.removeTwo.used) {
-    return;
+  const playerIndex = baseState.teams.findIndex((player) => player.id === playerId);
+  if (playerIndex === -1) {
+    showToast("تعذر العثور على اللاعب.");
+    return null;
   }
 
-  if (state.confirmAnswer || state.pendingAnswerKey) {
-    showToast("استخدم حذف إجابتين قبل اختيار الإجابة.");
-    return;
+  const player = baseState.teams[playerIndex];
+  if (player.abilities.removeTwo.used) {
+    showToast("هذا اللاعب استخدم حذف إجابتين مسبقًا.");
+    return null;
   }
 
   const wrongOptions = currentQuestion.question.options.filter(
@@ -1498,161 +1856,184 @@ function useRemoveTwo() {
 
   if (removableCount <= 0) {
     showToast("لا يمكن استخدام حذف إجابتين في هذا السؤال.");
-    return;
+    return null;
   }
 
   const removedKeys = shuffleArray(wrongOptions)
     .slice(0, removableCount)
     .map((option) => option.key);
-  const updatedTeams = state.teams.map((currentTeam, index) =>
-    index === currentQuestion.teamIndex
+  const updatedTeams = baseState.teams.map((currentPlayer, index) =>
+    index === playerIndex
       ? {
-          ...currentTeam,
+          ...currentPlayer,
           abilities: {
-            ...currentTeam.abilities,
+            ...currentPlayer.abilities,
             removeTwo: {
               used: true,
             },
           },
         }
-      : currentTeam
+      : currentPlayer
   );
 
-  commit({
-    ...state,
+  return {
+    ...baseState,
     teams: updatedTeams,
+    dialog: null,
     currentQuestion: {
       ...currentQuestion,
-      removedOptionKeys: [...currentQuestion.removedOptionKeys, ...removedKeys],
+      removedOptionKeys: Array.from(
+        new Set([...currentQuestion.removedOptionKeys, ...removedKeys])
+      ),
     },
-  });
-
-  showToast("تم حذف إجابتين غير صحيحتين.");
+  };
 }
 
-function useBlock() {
-  const currentQuestion = state.currentQuestion;
-  if (!currentQuestion) {
+function applyBlock(actorPlayerId, targetPlayerId) {
+  if (!actorPlayerId || !targetPlayerId || actorPlayerId === targetPlayerId) {
     return;
   }
 
-  const blockedTeamIndex = currentQuestion.teamIndex;
-  const blockingTeamIndex = getOpponentTeamIndex(blockedTeamIndex);
-  const blockingTeam = state.teams[blockingTeamIndex];
-
-  if (blockingTeam.abilities.block.used) {
+  const actorIndex = state.teams.findIndex((player) => player.id === actorPlayerId);
+  const targetIndex = state.teams.findIndex((player) => player.id === targetPlayerId);
+  if (actorIndex === -1 || targetIndex === -1) {
     return;
   }
 
-  const updatedBoard = markBoardSlotUsed(
-    state.board,
-    currentQuestion.categoryId,
-    currentQuestion.side,
-    currentQuestion.pointValue
-  );
-  const updatedSessionUsedQuestionIds = appendSessionQuestionId(
-    currentQuestion.question.id,
-    state.sessionUsedQuestionIds
-  );
-  const updatedTeams = state.teams.map((team, index) =>
-    index === blockingTeamIndex
-      ? {
-          ...team,
-          abilities: {
-            ...team.abilities,
-            block: {
-              used: true,
-            },
+  const actorPlayer = state.teams[actorIndex];
+  const targetPlayer = state.teams[targetIndex];
+  if (actorPlayer.abilities.block.used) {
+    return;
+  }
+
+  if (targetPlayer.blockedByPlayerId) {
+    showToast("هذا اللاعب عليه بلوك بالفعل للجولة القادمة.");
+    return;
+  }
+
+  const updatedTeams = state.teams.map((player, index) => {
+    if (index === actorIndex) {
+      return {
+        ...player,
+        abilities: {
+          ...player.abilities,
+          block: {
+            used: true,
           },
-        }
-      : team
-  );
+        },
+      };
+    }
+
+    if (index === targetIndex) {
+      return {
+        ...player,
+        blockedByPlayerId: actorPlayerId,
+      };
+    }
+
+    return player;
+  });
 
   commit({
     ...state,
     phase: "answer",
-    board: updatedBoard,
     teams: updatedTeams,
-    sessionUsedQuestionIds: updatedSessionUsedQuestionIds,
-    activeTeamIndex: blockingTeamIndex,
     currentQuestion: null,
-    pendingAnswerKey: "",
-    confirmAnswer: false,
+    selectedResponderId: "",
+    dialog: null,
     lastResult: {
-      type: "blocked",
-      isCorrect: false,
-      teamIndex: blockedTeamIndex,
-      blockingTeamIndex,
-      categoryName: currentQuestion.categoryName,
-      scoreDelta: 0,
-      selectedAnswer: "",
-      correctAnswer: currentQuestion.question.answerText,
-      usedDouble: currentQuestion.multiplier > 1,
+      type: "blockNotice",
+      actorPlayerId,
+      targetPlayerId,
     },
   });
 }
 
-function evaluateAnswer() {
-  const currentQuestion = state.currentQuestion;
-  if (!currentQuestion || !state.pendingAnswerKey) {
-    showToast("اختر إجابة أولاً.");
+function openAddPlayer(purpose) {
+  commit({
+    ...state,
+    dialog: {
+      type: "add-player",
+      purpose,
+    },
+  });
+}
+
+function closeDialog() {
+  commit({
+    ...state,
+    dialog: null,
+  });
+}
+
+function handleAddPlayerSubmit(formElement) {
+  const formData = new FormData(formElement);
+  const purpose = String(formData.get("purpose") || "").trim();
+  const name = String(formData.get("player_name") || "").trim();
+  const color = normalizeColorHex(String(formData.get("player_color") || ""));
+
+  if (!name) {
+    showToast("اكتب اسم اللاعب.");
     return;
   }
 
-  const selectedOption = currentQuestion.question.options.find(
-    (option) => option.key === state.pendingAnswerKey
-  );
-
-  if (!selectedOption) {
-    showToast("تعذر قراءة الإجابة المختارة.");
+  if (!color) {
+    showToast("اختر لونًا صالحًا للاعب.");
     return;
   }
 
-  const isCorrect = state.pendingAnswerKey === currentQuestion.question.answerKey;
-  const scoreDelta = isCorrect
-    ? currentQuestion.question.points * currentQuestion.multiplier
-    : -WRONG_PENALTY * currentQuestion.multiplier;
-  const updatedBoard = markBoardSlotUsed(
-    state.board,
-    currentQuestion.categoryId,
-    currentQuestion.side,
-    currentQuestion.pointValue
-  );
-  const updatedSessionUsedQuestionIds = appendSessionQuestionId(
-    currentQuestion.question.id,
-    state.sessionUsedQuestionIds
-  );
+  if (state.teams.some((player) => normalizeLooseText(player.name) === normalizeLooseText(name))) {
+    showToast("اسم اللاعب مستخدم بالفعل.");
+    return;
+  }
 
-  const updatedTeams = state.teams.map((team, index) =>
-    index === currentQuestion.teamIndex
-      ? {
-          ...team,
-          points: team.points + scoreDelta,
-        }
-      : team
-  );
+  if (state.teams.some((player) => normalizeColorHex(player.color) === color)) {
+    showToast("اختر لونًا مختلفًا عن ألوان اللاعبين الحاليين.");
+    return;
+  }
+
+  const newPlayer = createPlayerState({
+    id: createRuntimePlayerId(),
+    name,
+    color,
+  });
+  const nextTeams = [...state.teams, newPlayer];
+
+  if (purpose === "remove-two") {
+    const nextState = buildRemoveTwoState(
+      {
+        ...state,
+        teams: nextTeams,
+        dialog: null,
+      },
+      newPlayer.id
+    );
+    if (!nextState) {
+      return;
+    }
+
+    commit(nextState);
+    showToast(`تمت إضافة ${newPlayer.name} واستخدام حذف إجابتين له.`);
+    return;
+  }
+
+  if (purpose === "answer-select") {
+    commit({
+      ...state,
+      teams: nextTeams,
+      dialog: null,
+      selectedResponderId: newPlayer.id,
+    });
+    showToast(`تمت إضافة ${newPlayer.name}.`);
+    return;
+  }
 
   commit({
     ...state,
-    phase: "answer",
-    board: updatedBoard,
-    teams: updatedTeams,
-    sessionUsedQuestionIds: updatedSessionUsedQuestionIds,
-    activeTeamIndex: currentQuestion.teamIndex === 0 ? 1 : 0,
-    currentQuestion: null,
-    pendingAnswerKey: "",
-    confirmAnswer: false,
-    lastResult: {
-      type: isCorrect ? "correct" : "wrong",
-      isCorrect,
-      teamIndex: currentQuestion.teamIndex,
-      categoryName: currentQuestion.categoryName,
-      scoreDelta,
-      selectedAnswer: selectedOption.label,
-      correctAnswer: currentQuestion.question.answerText,
-      usedDouble: currentQuestion.multiplier > 1,
-    },
+    teams: nextTeams,
+    dialog: null,
   });
+  showToast(`تمت إضافة ${newPlayer.name}.`);
 }
 
 function moveAfterAnswer() {
@@ -1660,9 +2041,20 @@ function moveAfterAnswer() {
     return;
   }
 
+  const nextPhase =
+    state.lastResult.type === "blockNotice"
+      ? "board"
+      : isBoardFinished(state.board)
+        ? "winner"
+        : "board";
+
   commit({
     ...state,
-    phase: isBoardFinished(state.board) ? "winner" : "board",
+    phase: nextPhase,
+    currentQuestion: null,
+    selectedResponderId: "",
+    dialog: null,
+    lastResult: null,
   });
 }
 
@@ -1696,7 +2088,7 @@ function restartWithSameFile() {
   });
 }
 
-function markBoardSlotUsed(board, categoryId, side, pointValue) {
+function markBoardSlotResolved(board, categoryId, pointValue, resolution = {}) {
   return board.map((card) => {
     if (card.categoryId !== categoryId) {
       return card;
@@ -1706,12 +2098,11 @@ function markBoardSlotUsed(board, categoryId, side, pointValue) {
       ...card,
       slots: {
         ...card.slots,
-        [side]: {
-          ...card.slots[side],
-          [pointValue]: {
-            ...card.slots[side][pointValue],
-            used: true,
-          },
+        [pointValue]: {
+          ...card.slots[pointValue],
+          used: true,
+          answeredByPlayerId: resolution.answeredByPlayerId || "",
+          noAnswer: Boolean(resolution.noAnswer),
         },
       },
     };
@@ -1948,7 +2339,7 @@ function resolveColumnMap(headers) {
 }
 
 function extractOptions(row, columnMap) {
-  const separateOptions = OPTION_KEYS.map((key, index) => {
+  const separateOptions = OPTION_KEYS.map((key) => {
     const column =
       key === "A"
         ? columnMap.optionA
@@ -2127,7 +2518,7 @@ function estimateCategoryGameSlots(category, usedQuestionIds = []) {
     const count = (category.questionsByPoints[String(pointValue)] || []).filter(
       (question) => !usedQuestionIdSet.has(question.id)
     ).length;
-    return total + Math.min(2, count);
+    return total + Math.min(1, count);
   }, 0);
 }
 
@@ -2174,10 +2565,7 @@ function countCardAvailableQuestions(card) {
 
 function flattenBoardSlots(board) {
   return (board || []).flatMap((card) =>
-    POINT_VALUES.flatMap((pointValue) => [
-      card.slots.left[pointValue],
-      card.slots.right[pointValue],
-    ])
+    POINT_VALUES.map((pointValue) => card.slots?.[pointValue]).filter(Boolean)
   );
 }
 
@@ -2247,7 +2635,7 @@ function downloadExcelTemplate() {
     ["2. القيم المعتمدة للنقاط هي: 200 أو 400 أو 600."],
     ["3. اكتب الخيارات داخل خلية واحدة بنفس النمط: (أ) ... (ب) ... (ج) ... (د) ..."],
     ["4. اكتب الإجابة الصحيحة بصيغة مشابهة: (ب) الرياض أو اسم الإجابة نفسها."],
-    ["5. لتفادي نقص الأزرار في اللوحة، وفّر سؤالين على الأقل لكل قيمة داخل كل تصنيف."],
+    ["5. يفضّل توفير أكثر من سؤال لكل قيمة داخل كل تصنيف لزيادة التنوع بين الجلسات."],
     ["6. يمكنك حذف صفوف الأمثلة واستبدالها بأسئلتك الخاصة."],
   ];
 
@@ -2273,11 +2661,136 @@ function downloadExcelTemplate() {
 
 function isBoardFinished(board) {
   const availableSlots = flattenBoardSlots(board).filter((slot) => !slot.unavailable);
-  return availableSlots.every((slot) => slot.used);
+  return availableSlots.length > 0 && availableSlots.every((slot) => slot.used);
 }
 
-function getOpponentTeamIndex(teamIndex) {
-  return teamIndex === 0 ? 1 : 0;
+function canUseRemoveTwoInCurrentQuestion() {
+  const currentQuestion = state.currentQuestion;
+  if (!currentQuestion) {
+    return false;
+  }
+
+  const removablePlayers = state.teams.filter((player) => !player.abilities.removeTwo.used);
+  if (!removablePlayers.length) {
+    return false;
+  }
+
+  const wrongOptions = currentQuestion.question.options.filter(
+    (option) =>
+      option.key !== currentQuestion.question.answerKey &&
+      !currentQuestion.removedOptionKeys.includes(option.key)
+  );
+
+  return Math.min(2, Math.max(0, wrongOptions.length - 1)) > 0;
+}
+
+function getBlockedPlayerIds(players) {
+  return (players || [])
+    .filter((player) => player.blockedByPlayerId)
+    .map((player) => player.id);
+}
+
+function clearRoundBlocks(players, blockedPlayerIds = []) {
+  const blockedIdSet = new Set(blockedPlayerIds);
+  return players.map((player) =>
+    blockedIdSet.has(player.id)
+      ? {
+          ...player,
+          blockedByPlayerId: null,
+        }
+      : player
+  );
+}
+
+function getPlayerById(playerId, players = state.teams) {
+  return (players || []).find((player) => player.id === playerId) || null;
+}
+
+function getPlayerName(playerId, players = state.teams) {
+  return getPlayerById(playerId, players)?.name || "";
+}
+
+function createRuntimePlayerId() {
+  return `player-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getNextAvailableColor(players = state.teams) {
+  const usedColors = new Set(players.map((player) => normalizeColorHex(player.color)));
+  const nextPaletteColor = TEAM_COLORS.find(
+    (color) => !usedColors.has(normalizeColorHex(color))
+  );
+  if (nextPaletteColor) {
+    return nextPaletteColor;
+  }
+
+  return hslToHex((players.length * 43) % 360, 82, 58);
+}
+
+function normalizeColorHex(color) {
+  const value = String(color || "").trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(value)) {
+    return value;
+  }
+
+  if (/^#[0-9a-f]{3}$/.test(value)) {
+    return `#${value[1]}${value[1]}${value[2]}${value[2]}${value[3]}${value[3]}`;
+  }
+
+  return "";
+}
+
+function hslToHex(h, s, l) {
+  const hue = ((Number(h) % 360) + 360) % 360;
+  const saturation = Math.max(0, Math.min(100, Number(s))) / 100;
+  const lightness = Math.max(0, Math.min(100, Number(l))) / 100;
+  const c = (1 - Math.abs(2 * lightness - 1)) * saturation;
+  const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+  const m = lightness - c / 2;
+
+  let r = 0;
+  let g = 0;
+  let b = 0;
+
+  if (hue < 60) {
+    r = c;
+    g = x;
+  } else if (hue < 120) {
+    r = x;
+    g = c;
+  } else if (hue < 180) {
+    g = c;
+    b = x;
+  } else if (hue < 240) {
+    g = x;
+    b = c;
+  } else if (hue < 300) {
+    r = x;
+    b = c;
+  } else {
+    r = c;
+    b = x;
+  }
+
+  const toHex = (value) =>
+    Math.round((value + m) * 255)
+      .toString(16)
+      .padStart(2, "0");
+
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+function getContrastTextColor(color) {
+  const normalized = normalizeColorHex(color);
+  if (!normalized) {
+    return "#ffffff";
+  }
+
+  const red = Number.parseInt(normalized.slice(1, 3), 16);
+  const green = Number.parseInt(normalized.slice(3, 5), 16);
+  const blue = Number.parseInt(normalized.slice(5, 7), 16);
+  const luminance = (red * 299 + green * 587 + blue * 114) / 1000;
+
+  return luminance > 160 ? "#112033" : "#ffffff";
 }
 
 function displayOptionKey(value) {
@@ -2390,7 +2903,8 @@ async function shareCurrentView() {
     return;
   }
 
-  const isBoardView = shareRoot.classList.contains("board-view");
+  const isBoardView =
+    shareRoot.classList.contains("board-canvas") || state.phase === "board";
   const shareWidth = isBoardView ? DESKTOP_SHARE_WIDTH : 980;
   const shareHeight = measureShareContentHeight(shareRoot, shareWidth);
   const hiddenElements = Array.from(shareRoot.querySelectorAll(".no-capture"));
