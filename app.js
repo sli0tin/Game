@@ -1,5 +1,18 @@
+import {
+  buildRoomUrl,
+  createRoom,
+  leaveRoom,
+  sendRoomMessage,
+  subscribeToRoom,
+  upsertParticipant,
+  writeSharedGameState,
+} from "./firebase-service.js";
+
 const STORAGE_KEY = "arena-quiz-state-v2";
 const SHUFFLE_MEMORY_KEY = "arena-quiz-shuffle-memory-v1";
+const CLIENT_ID_KEY = "arena-quiz-client-id-v1";
+const ROOM_RULES_TEXT =
+  "قوانين اللعبة: كل واحد له دور يختار سؤال، لكن الإجابة تتحدد لأسرع واحد جاوب فيكم.";
 const POINT_VALUES = [200, 400, 600];
 const OPTION_KEYS = ["A", "B", "C", "D"];
 const DESKTOP_SHARE_WIDTH = 1320;
@@ -42,6 +55,9 @@ const toastElement = document.querySelector("#toast");
 let toastTimer = null;
 let shuffleMemory = loadShuffleMemory();
 let state = loadState() || createInitialState();
+let roomContext = createRoomContext();
+
+initializeRoomMode();
 
 render();
 
@@ -49,6 +65,40 @@ appElement.addEventListener("click", onAppClick);
 appElement.addEventListener("change", onAppChange);
 appElement.addEventListener("input", onAppInput);
 appElement.addEventListener("submit", onAppSubmit);
+
+function createRoomContext() {
+  return {
+    clientId: getOrCreateClientId(),
+    roomCode: "",
+    roomUrl: "",
+    hostClientId: "",
+    isHost: false,
+    roomExists: false,
+    joinedParticipant: null,
+    participants: [],
+    chatMessages: [],
+    unsubscribeRoom: null,
+    lastSyncedRevision: 0,
+    pendingName: "",
+    pendingColor: TEAM_COLORS[0],
+    pendingRole: "player",
+  };
+}
+
+function initializeRoomMode() {
+  const roomCode = getRoomCodeFromUrl();
+  if (!roomCode) {
+    return;
+  }
+
+  roomContext.roomCode = roomCode;
+  roomContext.roomUrl = buildRoomUrl(roomCode);
+  state = {
+    ...createInitialState(),
+    phase: "room-join",
+  };
+  subscribeCurrentRoom();
+}
 
 function createInitialUploadState() {
   return {
@@ -246,48 +296,77 @@ function persistShuffleMemory() {
   localStorage.setItem(SHUFFLE_MEMORY_KEY, JSON.stringify(shuffleMemory));
 }
 
-function commit(nextState) {
+function commit(nextState, options = {}) {
   state = nextState;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   render();
+
+  if (options.sync !== false) {
+    queueRoomStateSync(nextState);
+  }
 }
 
 function resetAllState() {
+  if (roomContext.unsubscribeRoom) {
+    roomContext.unsubscribeRoom();
+    roomContext.unsubscribeRoom = null;
+  }
+
+  if (roomContext.joinedParticipant?.id && roomContext.roomCode) {
+    leaveRoom(roomContext.roomCode, roomContext.joinedParticipant.id).catch(() => {});
+  }
+
   localStorage.removeItem(STORAGE_KEY);
   state = createInitialState();
+  roomContext = createRoomContext();
+  clearRoomCodeFromUrl();
   render();
 }
 
 function render() {
   document.body.dataset.phase = getBodyPhase();
+  document.body.dataset.room = roomContext.roomCode ? "active" : "idle";
 
-  switch (state.phase) {
-    case "category-select":
-      appElement.innerHTML = renderCategorySelectionScreen();
-      break;
-    case "team-setup":
-      appElement.innerHTML = renderTeamSetupScreen();
-      break;
-    case "board":
-      appElement.innerHTML = renderBoardScreen();
-      break;
-    case "question":
-      appElement.innerHTML = renderQuestionScreen();
-      break;
-    case "answer-select":
-      appElement.innerHTML = renderAnswerSelectScreen();
-      break;
-    case "answer":
-      appElement.innerHTML = renderAnswerScreen();
-      break;
-    case "winner":
-      appElement.innerHTML = renderWinnerScreen();
-      break;
-    case "upload":
-    default:
-      appElement.innerHTML = renderUploadScreen();
-      break;
+  let screenHtml = "";
+  if (roomContext.roomCode && !roomContext.joinedParticipant) {
+    screenHtml = renderRoomJoinScreen();
+  } else {
+    switch (state.phase) {
+      case "room-join":
+      case "room-lobby":
+        screenHtml = renderRoomLobbyScreen();
+        break;
+      case "category-select":
+        screenHtml = renderCategorySelectionScreen();
+        break;
+      case "team-setup":
+        screenHtml = renderTeamSetupScreen();
+        break;
+      case "board":
+        screenHtml = renderBoardScreen();
+        break;
+      case "question":
+        screenHtml = renderQuestionScreen();
+        break;
+      case "answer-select":
+        screenHtml = renderAnswerSelectScreen();
+        break;
+      case "answer":
+        screenHtml = renderAnswerScreen();
+        break;
+      case "winner":
+        screenHtml = renderWinnerScreen();
+        break;
+      case "upload":
+      default:
+        screenHtml = renderUploadScreen();
+        break;
+    }
   }
+
+  appElement.innerHTML = roomContext.roomCode
+    ? renderRoomLayout(screenHtml)
+    : screenHtml;
 }
 
 function getBodyPhase() {
@@ -304,6 +383,275 @@ function getBodyPhase() {
   }
 
   return "answer-wrong";
+}
+
+function renderRoomLayout(content) {
+  return `
+    <div class="room-layout">
+      ${renderRoomHeader()}
+      <div class="room-stage">${content}</div>
+      ${renderChatDock()}
+    </div>
+  `;
+}
+
+function renderRoomHeader() {
+  const playerCount = getRoomPlayers().length;
+  const spectatorCount = getRoomSpectators().length;
+  const participantLabel = roomContext.joinedParticipant
+    ? `${roomContext.joinedParticipant.name} • ${
+        roomContext.joinedParticipant.role === "player" ? "لاعب" : "متفرج"
+      }`
+    : "لم تنضم بعد";
+
+  return `
+    <section class="room-topbar panel">
+      <div class="panel-inner room-topbar-inner">
+        <div class="room-chip-group">
+          <span class="pill">الغرفة: ${escapeHtml(roomContext.roomCode || "----")}</span>
+          <span class="pill">اللاعبون: ${formatNumber(playerCount)} / 4</span>
+          <span class="pill">المتفرجون: ${formatNumber(spectatorCount)}</span>
+          <span class="pill">${escapeHtml(participantLabel)}</span>
+        </div>
+        <div class="btn-row room-actions no-capture" style="margin-top:0;">
+          <button class="btn btn-secondary" data-action="copy-room-link">نسخ الرابط</button>
+          ${
+            roomContext.isHost
+              ? `<button class="btn btn-ghost" data-action="send-rules">القوانين</button>`
+              : ""
+          }
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderChatDock() {
+  const messages = roomContext.chatMessages.slice(-40);
+  const joined = Boolean(roomContext.joinedParticipant);
+
+  return `
+    <section class="chat-dock panel">
+      <div class="panel-inner chat-dock-inner">
+        <div class="chat-dock-head">
+          <h3>الدردشة</h3>
+          <span>${escapeHtml(roomContext.roomCode || "")}</span>
+        </div>
+
+        <div class="chat-messages" id="chat-messages">
+          ${
+            messages.length
+              ? messages
+                  .map(
+                    (message) => `
+                      <article class="chat-message ${message.kind === "system" ? "system" : ""}">
+                        <strong>${escapeHtml(message.name || "النظام")}</strong>
+                        <p>${escapeHtml(message.text || "")}</p>
+                      </article>
+                    `
+                  )
+                  .join("")
+              : `<div class="chat-empty">لا توجد رسائل بعد.</div>`
+          }
+        </div>
+
+        <form id="chat-form" class="chat-form ${joined ? "" : "disabled"}">
+          <input
+            type="text"
+            name="chat_message"
+            maxlength="220"
+            placeholder="${joined ? "اكتب رسالة..." : "انضم للغرفة أولًا"}"
+            ${joined ? "" : "disabled"}
+          />
+          <button class="btn btn-primary" type="submit" ${joined ? "" : "disabled"}>
+            إرسال
+          </button>
+        </form>
+      </div>
+    </section>
+  `;
+}
+
+function renderRoomJoinScreen() {
+  const playerCount = getRoomPlayers().length;
+  const playerSlotsAvailable = playerCount < 4;
+  const defaultColor = getNextAvailableColor(getRoomPlayers());
+
+  return `
+    <section class="screen panel room-screen">
+      <div class="panel-inner room-join-layout">
+        <div class="room-card">
+          <h2 class="section-title">الانضمام إلى الغرفة</h2>
+          <p class="section-subtitle">
+            اكتب اسمك، اختر لونًا غير مستخدم إذا أردت الدخول كلاعب، أو اختر
+            المشاهدة فقط كمتفرج.
+          </p>
+
+          ${
+            !roomContext.roomExists
+              ? `<div class="info-banner" style="margin-top:18px;background:rgba(255,92,92,0.1);border-color:rgba(255,92,92,0.18);color:#ffd6d6;">تعذر العثور على هذه الغرفة حاليًا أو أنها لم تُنشأ بعد.</div>`
+              : ""
+          }
+
+          <div class="helper-row">
+            <div class="pill">رمز الغرفة: ${escapeHtml(roomContext.roomCode || "----")}</div>
+            <div class="pill">أماكن اللاعبين المتبقية: ${formatNumber(Math.max(0, 4 - playerCount))}</div>
+          </div>
+
+          <form id="join-room-form" style="margin-top:22px;">
+            <input
+              type="text"
+              name="join_name"
+              placeholder="اسمك داخل الغرفة"
+              maxlength="30"
+              value="${escapeHtmlAttribute(roomContext.pendingName || "")}"
+              required
+              style="width:100%;margin-top:0;border-radius:16px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);color:var(--text);padding:14px 16px;font:inherit;"
+            />
+
+            <div class="join-role-grid">
+              <label class="role-card ${roomContext.pendingRole === "player" ? "selected" : ""} ${
+                playerSlotsAvailable ? "" : "disabled"
+              }">
+                <input
+                  type="radio"
+                  name="join_role"
+                  value="player"
+                  ${roomContext.pendingRole === "player" && playerSlotsAvailable ? "checked" : ""}
+                  ${playerSlotsAvailable ? "" : "disabled"}
+                />
+                <strong>لاعب</strong>
+                <span>${playerSlotsAvailable ? "سيظهر اسمك ونقاطك داخل المباراة." : "لا توجد أماكن لاعبين متبقية."}</span>
+              </label>
+
+              <label class="role-card ${roomContext.pendingRole === "spectator" || !playerSlotsAvailable ? "selected" : ""}">
+                <input
+                  type="radio"
+                  name="join_role"
+                  value="spectator"
+                  ${
+                    roomContext.pendingRole === "spectator" || !playerSlotsAvailable
+                      ? "checked"
+                      : ""
+                  }
+                />
+                <strong>متفرج</strong>
+                <span>تشاهد مجريات اللعبة وتشارك في الدردشة فقط.</span>
+              </label>
+            </div>
+
+            <div class="join-color-row">
+              <span>لون اللاعب</span>
+              <input
+                type="color"
+                name="join_color"
+                value="${escapeHtmlAttribute(normalizeColorHex(roomContext.pendingColor) || defaultColor)}"
+              />
+            </div>
+
+            <div class="btn-row">
+              <button class="btn btn-primary" type="submit" ${
+                roomContext.roomExists ? "" : "disabled"
+              }>
+                دخول الغرفة
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <aside class="summary-card">
+          <h3>المشاركون الآن</h3>
+          <div class="room-roster-grid compact">
+            ${renderParticipantRoster()}
+          </div>
+        </aside>
+      </div>
+    </section>
+  `;
+}
+
+function renderRoomLobbyScreen() {
+  const players = getRoomPlayers();
+  const spectators = getRoomSpectators();
+  const canStartCategories =
+    roomContext.isHost && roomContext.joinedParticipant && state.categories.length > 0;
+
+  return `
+    <section class="screen panel room-screen">
+      <div class="panel-inner room-lobby-layout">
+        <div class="room-card">
+          <h2 class="section-title">الغرفة جاهزة</h2>
+          <p class="section-subtitle">
+            انشر الرابط أو رمز الغرفة، وانتظر حتى يدخل اللاعبون. التحكم الكامل
+            في سير المباراة يبقى عند منشئ الغرفة.
+          </p>
+
+          <div class="helper-row">
+            <div class="pill">الرابط: ${escapeHtml(roomContext.roomUrl)}</div>
+            <div class="pill">رمز الغرفة: ${escapeHtml(roomContext.roomCode)}</div>
+          </div>
+
+          <div class="room-roster-block">
+            <h3>اللاعبون</h3>
+            <div class="room-roster-grid">
+              ${
+                players.length
+                  ? players.map((participant) => renderParticipantCard(participant)).join("")
+                  : `<div class="chat-empty">لم ينضم لاعبون بعد.</div>`
+              }
+            </div>
+          </div>
+
+          <div class="room-roster-block">
+            <h3>المتفرجون</h3>
+            <div class="room-roster-grid compact">
+              ${
+                spectators.length
+                  ? spectators.map((participant) => renderParticipantCard(participant)).join("")
+                  : `<div class="chat-empty">لا يوجد متفرجون بعد.</div>`
+              }
+            </div>
+          </div>
+
+          ${
+            roomContext.isHost
+              ? `<div class="btn-row">
+                  <button
+                    class="btn btn-primary"
+                    data-action="go-room-categories"
+                    ${canStartCategories && players.length >= 2 ? "" : "disabled"}
+                  >
+                    متابعة المباراة
+                  </button>
+                </div>`
+              : `<div class="info-banner" style="margin-top:20px;">بانتظار منشئ الغرفة ليبدأ تجهيز المباراة.</div>`
+          }
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderParticipantRoster() {
+  return roomContext.participants.length
+    ? roomContext.participants.map((participant) => renderParticipantCard(participant)).join("")
+    : `<div class="chat-empty">لا يوجد مشاركون بعد.</div>`;
+}
+
+function renderParticipantCard(participant) {
+  const tone =
+    participant.role === "player" && participant.color
+      ? `style="--participant-color:${escapeHtmlAttribute(participant.color)};--participant-text:${escapeHtmlAttribute(
+          getContrastTextColor(participant.color)
+        )};"`
+      : "";
+
+  return `
+    <article class="participant-card ${participant.role === "player" ? "player" : "spectator"}" ${tone}>
+      <strong>${escapeHtml(participant.name)}</strong>
+      <span>${participant.role === "player" ? "لاعب" : "متفرج"}${participant.id === roomContext.hostClientId ? " • منشئ" : ""}</span>
+    </article>
+  `;
 }
 
 function renderUploadScreen() {
@@ -508,7 +856,7 @@ function renderCategorySelectionScreen() {
             data-action="go-team-setup"
             ${selectedCount === targetCount && targetCount > 0 ? "" : "disabled"}
           >
-            التالي
+            ${roomContext.roomCode ? "بدء المباراة" : "التالي"}
           </button>
           <button class="btn btn-ghost" data-action="back-to-upload">العودة للملف</button>
         </div>
@@ -767,14 +1115,18 @@ function renderAnswerSelectScreen() {
             )
             .join("")}
 
-          <button
-            class="choice-card add-choice-card"
-            data-action="open-add-player"
-            data-purpose="answer-select"
-          >
-            <strong>+</strong>
-            <span>لاعب جديد</span>
-          </button>
+          ${
+            roomContext.roomCode
+              ? ""
+              : `<button
+                  class="choice-card add-choice-card"
+                  data-action="open-add-player"
+                  data-purpose="answer-select"
+                >
+                  <strong>+</strong>
+                  <span>لاعب جديد</span>
+                </button>`
+          }
 
           <button
             class="choice-card no-one-card ${selectedResponderId === "__none__" ? "selected" : ""}"
@@ -1191,7 +1543,7 @@ function renderPickPlayerDialog() {
             .join("")}
 
           ${
-            dialog.purpose === "remove-two"
+            dialog.purpose === "remove-two" && !roomContext.roomCode
               ? `<button class="choice-card add-choice-card" data-action="open-add-player" data-purpose="remove-two">
                   <strong>+</strong>
                   <span>لاعب جديد</span>
@@ -1250,12 +1602,28 @@ function onAppClick(event) {
 
   const { action } = actionElement.dataset;
 
+  if (roomContext.roomCode && !roomContext.isHost && requiresHostControl(action)) {
+    showToast("التحكم الكامل في اللعبة مخصص لمنشئ الغرفة.");
+    return;
+  }
+
   switch (action) {
     case "start-flow":
-      startFlow();
+      startFlow().catch((error) => {
+        showToast(error instanceof Error ? error.message : "تعذر إنشاء الغرفة.");
+      });
       break;
     case "download-template":
       downloadExcelTemplate();
+      break;
+    case "copy-room-link":
+      copyCurrentRoomLink();
+      break;
+    case "send-rules":
+      sendRulesMessage();
+      break;
+    case "go-room-categories":
+      goToRoomLobbyCategories();
       break;
     case "toggle-category":
       toggleCategory(actionElement.dataset.categoryId || "");
@@ -1337,6 +1705,34 @@ function onAppClick(event) {
   }
 }
 
+function requiresHostControl(action) {
+  return [
+    "start-flow",
+    "download-template",
+    "toggle-category",
+    "go-team-setup",
+    "back-to-upload",
+    "back-to-categories",
+    "pick-color",
+    "activate-double",
+    "launch-slot",
+    "open-remove-two-picker",
+    "open-block-picker",
+    "pick-dialog-player",
+    "open-add-player",
+    "close-dialog",
+    "go-answer-select",
+    "select-responder",
+    "select-no-one",
+    "confirm-responder",
+    "next-after-answer",
+    "restart-same-file",
+    "reset-all",
+    "go-room-categories",
+    "send-rules",
+  ].includes(action);
+}
+
 function onAppChange(event) {
   const target = event.target;
 
@@ -1348,6 +1744,17 @@ function onAppChange(event) {
     return;
   }
 
+  if (target.name === "join_role") {
+    roomContext.pendingRole = target.value === "spectator" ? "spectator" : "player";
+    render();
+    return;
+  }
+
+  if (target.name === "join_color") {
+    roomContext.pendingColor = target.value;
+    return;
+  }
+
   if (target.dataset.teamNameIndex) {
     syncTeamName(Number(target.dataset.teamNameIndex), target.value, true);
   }
@@ -1355,6 +1762,11 @@ function onAppChange(event) {
 
 function onAppInput(event) {
   const target = event.target;
+  if (target.name === "join_name") {
+    roomContext.pendingName = target.value;
+    return;
+  }
+
   if (!target.dataset.teamNameIndex) {
     return;
   }
@@ -1363,6 +1775,14 @@ function onAppInput(event) {
 }
 
 function onAppSubmit(event) {
+  if (event.target.id === "join-room-form") {
+    event.preventDefault();
+    joinCurrentRoom(event.target).catch((error) => {
+      showToast(error instanceof Error ? error.message : "تعذر الانضمام إلى الغرفة.");
+    });
+    return;
+  }
+
   if (event.target.id === "teams-form") {
     event.preventDefault();
     finalizeTeamsAndStartBoard();
@@ -1372,12 +1792,30 @@ function onAppSubmit(event) {
   if (event.target.id === "add-player-form") {
     event.preventDefault();
     handleAddPlayerSubmit(event.target);
+    return;
+  }
+
+  if (event.target.id === "chat-form") {
+    event.preventDefault();
+    sendChatFromForm(event.target).catch((error) => {
+      showToast(error instanceof Error ? error.message : "تعذر إرسال الرسالة.");
+    });
   }
 }
 
-function startFlow() {
+async function startFlow() {
   if (!state.categories.length) {
     showToast("ارفع ملف الإكسل أولاً.");
+    return;
+  }
+
+  if (!roomContext.roomCode) {
+    await createAndOpenRoom();
+    return;
+  }
+
+  if (!roomContext.isHost) {
+    showToast("فقط منشئ الغرفة يستطيع بدء المباراة.");
     return;
   }
 
@@ -1388,7 +1826,7 @@ function startFlow() {
 
   commit({
     ...state,
-    phase: "category-select",
+    phase: "room-lobby",
     selectedCategoryIds: targetSelection.length ? targetSelection : state.selectedCategoryIds,
   });
 }
@@ -1439,6 +1877,11 @@ function goToTeamSetup() {
 
   if (selectedIds.length !== targetCount || targetCount === 0) {
     showToast("أكمل اختيار التصنيفات المطلوبة أولاً.");
+    return;
+  }
+
+  if (roomContext.roomCode) {
+    startRoomMatch(selectedIds);
     return;
   }
 
@@ -1510,6 +1953,45 @@ function finalizeTeamsAndStartBoard() {
     phase: "board",
     teamDraft: cleanedDraft,
     teams: cleanedDraft.map((team, index) => createDraftPlayer(team, index)),
+    board,
+    currentQuestion: null,
+    selectedResponderId: "",
+    dialog: null,
+    lastResult: null,
+  });
+}
+
+function startRoomMatch(selectedCategoryIds = state.selectedCategoryIds) {
+  if (!roomContext.isHost) {
+    showToast("فقط منشئ الغرفة يستطيع بدء المباراة.");
+    return;
+  }
+
+  const players = getRoomPlayers().map((participant) =>
+    createPlayerState({
+      id: participant.id,
+      name: participant.name,
+      color: participant.color,
+      points: 0,
+    })
+  );
+
+  if (players.length < 2) {
+    showToast("يجب أن ينضم لاعبان على الأقل قبل بدء المباراة.");
+    return;
+  }
+
+  const board = buildBoard(selectedCategoryIds);
+  if (!countTotalAvailableSlots(board)) {
+    showToast("لا توجد أسئلة كافية لبناء لوحة لعب صالحة.");
+    return;
+  }
+
+  commit({
+    ...state,
+    phase: "board",
+    selectedCategoryIds,
+    teams: players,
     board,
     currentQuestion: null,
     selectedResponderId: "",
@@ -1950,6 +2432,11 @@ function applyBlock(actorPlayerId, targetPlayerId) {
 }
 
 function openAddPlayer(purpose) {
+  if (roomContext.roomCode) {
+    showToast("إضافة اللاعبين تكون عبر الغرفة قبل بدء المباراة.");
+    return;
+  }
+
   commit({
     ...state,
     dialog: {
@@ -1967,6 +2454,11 @@ function closeDialog() {
 }
 
 function handleAddPlayerSubmit(formElement) {
+  if (roomContext.roomCode) {
+    showToast("إضافة اللاعبين تكون عبر الغرفة.");
+    return;
+  }
+
   const formData = new FormData(formElement);
   const purpose = String(formData.get("purpose") || "").trim();
   const name = String(formData.get("player_name") || "").trim();
@@ -2086,6 +2578,303 @@ function restartWithSameFile() {
     sessionUsedQuestionIds: state.sessionUsedQuestionIds,
     phase: "category-select",
   });
+}
+
+async function createAndOpenRoom() {
+  const roomCode = generateRoomCode();
+  roomContext.roomCode = roomCode;
+  roomContext.roomUrl = buildRoomUrl(roomCode);
+  roomContext.hostClientId = roomContext.clientId;
+  roomContext.roomExists = true;
+  roomContext.pendingColor = getNextAvailableColor([]);
+  setRoomCodeInUrl(roomCode);
+
+  await createRoom(roomCode, roomContext.clientId, {
+    ...state,
+    phase: "room-lobby",
+  });
+
+  subscribeCurrentRoom();
+  commit(
+    {
+      ...state,
+      phase: "room-join",
+    },
+    { sync: false }
+  );
+}
+
+function subscribeCurrentRoom() {
+  if (!roomContext.roomCode) {
+    return;
+  }
+
+  if (roomContext.unsubscribeRoom) {
+    roomContext.unsubscribeRoom();
+  }
+
+  roomContext.unsubscribeRoom = subscribeToRoom(roomContext.roomCode, handleRoomSnapshot);
+}
+
+function handleRoomSnapshot(roomData) {
+  roomContext.roomExists = Boolean(roomData);
+  roomContext.hostClientId = roomData?.meta?.hostClientId || roomContext.hostClientId;
+  roomContext.isHost = roomContext.hostClientId === roomContext.clientId;
+  roomContext.participants = normalizeParticipants(roomData?.participants);
+  roomContext.chatMessages = normalizeChatMessages(roomData?.chat);
+  roomContext.joinedParticipant =
+    roomContext.participants.find((participant) => participant.id === roomContext.clientId) || null;
+  roomContext.pendingColor = getNextAvailableColor(getRoomPlayers());
+
+  const remoteSharedState = roomData?.sharedState;
+  if (remoteSharedState?.game) {
+    const remoteRevision = Number(remoteSharedState.revision) || 0;
+    const ownUpdate =
+      roomContext.isHost && remoteSharedState.updatedBy === roomContext.clientId;
+
+    if (ownUpdate) {
+      roomContext.lastSyncedRevision = remoteRevision;
+    } else if (remoteRevision >= roomContext.lastSyncedRevision) {
+      roomContext.lastSyncedRevision = remoteRevision;
+      state = hydrateRemoteState(remoteSharedState.game);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    }
+  } else if (roomContext.roomCode) {
+    state = {
+      ...createInitialState(),
+      phase: "room-join",
+    };
+  }
+
+  if (!roomContext.roomExists) {
+    state = {
+      ...createInitialState(),
+      phase: "room-join",
+    };
+  }
+
+  render();
+}
+
+function hydrateRemoteState(remoteGameState) {
+  const teamDraft =
+    Array.isArray(remoteGameState?.teamDraft) && remoteGameState.teamDraft.length
+      ? remoteGameState.teamDraft
+      : createInitialTeamDraft();
+
+  return {
+    ...createInitialState(),
+    ...(remoteGameState || {}),
+    teamDraft,
+    teams: normalizeStoredTeams(remoteGameState?.teams, teamDraft),
+    currentQuestion: normalizeCurrentQuestion(remoteGameState?.currentQuestion),
+    sessionUsedQuestionIds: Array.isArray(remoteGameState?.sessionUsedQuestionIds)
+      ? remoteGameState.sessionUsedQuestionIds
+      : [],
+    upload: {
+      ...createInitialUploadState(),
+      ...(remoteGameState?.upload || {}),
+    },
+  };
+}
+
+async function queueRoomStateSync(nextState) {
+  if (!roomContext.roomCode || !roomContext.isHost || !roomContext.roomExists) {
+    return;
+  }
+
+  const nextRevision = roomContext.lastSyncedRevision + 1;
+  roomContext.lastSyncedRevision = nextRevision;
+
+  try {
+    await writeSharedGameState(roomContext.roomCode, {
+      game: nextState,
+      revision: nextRevision,
+      updatedBy: roomContext.clientId,
+      updatedAt: Date.now(),
+    });
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : "تعذر مزامنة حالة الغرفة.");
+  }
+}
+
+async function joinCurrentRoom(formElement) {
+  if (!roomContext.roomCode) {
+    throw new Error("لا يوجد رمز غرفة صالح.");
+  }
+
+  if (!roomContext.roomExists) {
+    throw new Error("هذه الغرفة غير موجودة حاليًا.");
+  }
+
+  const formData = new FormData(formElement);
+  const name = String(formData.get("join_name") || "").trim();
+  const requestedRole = String(formData.get("join_role") || "player");
+  const requestedColor = normalizeColorHex(String(formData.get("join_color") || ""));
+
+  if (!name) {
+    throw new Error("اكتب اسمك أولًا.");
+  }
+
+  const finalParticipant = await upsertParticipant(roomContext.roomCode, {
+    id: roomContext.clientId,
+    name,
+    role: requestedRole === "spectator" ? "spectator" : "player",
+    color: requestedColor,
+    isHost: roomContext.isHost,
+  });
+
+  roomContext.pendingName = finalParticipant.name;
+  roomContext.pendingRole = finalParticipant.role;
+  roomContext.pendingColor = finalParticipant.color || roomContext.pendingColor;
+
+  await sendRoomMessage(roomContext.roomCode, {
+    senderId: roomContext.clientId,
+    name: "النظام",
+    kind: "system",
+    text: `${finalParticipant.name} انضم إلى الغرفة كـ ${
+      finalParticipant.role === "player" ? "لاعب" : "متفرج"
+    }.`,
+  });
+
+  roomContext.joinedParticipant = finalParticipant;
+
+  if (roomContext.isHost) {
+    commit(
+      {
+        ...state,
+        phase: "room-lobby",
+      },
+      { sync: false }
+    );
+    return;
+  }
+
+  render();
+}
+
+function goToRoomLobbyCategories() {
+  if (!roomContext.isHost) {
+    showToast("فقط منشئ الغرفة يستطيع الانتقال إلى إعداد المباراة.");
+    return;
+  }
+
+  const targetSelection = getAutoSelectedCategoryIds(
+    state.categories,
+    state.sessionUsedQuestionIds
+  );
+
+  commit({
+    ...state,
+    phase: "category-select",
+    selectedCategoryIds: targetSelection.length ? targetSelection : state.selectedCategoryIds,
+  });
+}
+
+async function sendChatFromForm(formElement) {
+  const input = formElement.querySelector('input[name="chat_message"]');
+  const text = (input?.value || "").trim();
+
+  if (!text || !roomContext.roomCode || !roomContext.joinedParticipant) {
+    return;
+  }
+
+  await sendRoomMessage(roomContext.roomCode, {
+    senderId: roomContext.clientId,
+    name: roomContext.joinedParticipant.name,
+    kind: "user",
+    text,
+  });
+
+  input.value = "";
+}
+
+async function sendRulesMessage() {
+  if (!roomContext.roomCode || !roomContext.isHost) {
+    return;
+  }
+
+  await sendRoomMessage(roomContext.roomCode, {
+    senderId: roomContext.clientId,
+    name: "القوانين",
+    kind: "system",
+    text: ROOM_RULES_TEXT,
+  });
+}
+
+function copyCurrentRoomLink() {
+  if (!roomContext.roomUrl) {
+    return;
+  }
+
+  navigator.clipboard
+    ?.writeText(roomContext.roomUrl)
+    .then(() => {
+      showToast("تم نسخ رابط الغرفة.");
+    })
+    .catch(() => {
+      showToast(roomContext.roomUrl);
+    });
+}
+
+function normalizeParticipants(participantsMap) {
+  return Object.values(participantsMap || {})
+    .filter(Boolean)
+    .sort((left, right) => (left.joinedAt || 0) - (right.joinedAt || 0));
+}
+
+function normalizeChatMessages(chatMap) {
+  return Object.values(chatMap || {})
+    .filter(Boolean)
+    .sort((left, right) => (left.createdAt || 0) - (right.createdAt || 0));
+}
+
+function getRoomPlayers() {
+  return roomContext.participants.filter((participant) => participant.role === "player");
+}
+
+function getRoomSpectators() {
+  return roomContext.participants.filter((participant) => participant.role !== "player");
+}
+
+function getOrCreateClientId() {
+  const existing = localStorage.getItem(CLIENT_ID_KEY);
+  if (existing) {
+    return existing;
+  }
+
+  const clientId = `client-${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+  localStorage.setItem(CLIENT_ID_KEY, clientId);
+  return clientId;
+}
+
+function getRoomCodeFromUrl() {
+  try {
+    const url = new URL(window.location.href);
+    return String(url.searchParams.get("room") || "")
+      .trim()
+      .toUpperCase();
+  } catch {
+    return "";
+  }
+}
+
+function setRoomCodeInUrl(roomCode) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("room", roomCode);
+  window.history.replaceState({}, "", url.toString());
+}
+
+function clearRoomCodeFromUrl() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("room");
+  window.history.replaceState({}, "", url.toString());
+}
+
+function generateRoomCode() {
+  return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
 function markBoardSlotResolved(board, categoryId, pointValue, resolution = {}) {
