@@ -374,7 +374,8 @@ function scheduleQuestionReveal(expectedQuestionKey, delayMs) {
       status: 'question',
       'currentQ/startTime': Date.now(),
       answers: null,
-      answerTimes: null
+      answerTimes: null,
+      answerOrders: null
     });
   }, Math.max(0, delayMs));
 }
@@ -400,7 +401,8 @@ async function removePlayerFromRoom(playerId, roomOverride = null) {
     [`players/${playerId}`]: null,
     [`presence/${playerId}`]: null,
     [`answers/${playerId}`]: null,
-    [`answerTimes/${playerId}`]: null
+    [`answerTimes/${playerId}`]: null,
+    [`answerOrders/${playerId}`]: null
   };
 
   if (room.host === playerId) {
@@ -429,6 +431,7 @@ async function removePlayerFromRoom(playerId, roomOverride = null) {
     updates.currentQ = null;
     updates.answers = null;
     updates.answerTimes = null;
+    updates.answerOrders = null;
   }
 
   await db.ref(`rooms/${roomId}`).update(updates);
@@ -960,9 +963,10 @@ async function selectQuestion(cat, pts) {
 
   await db.ref(`rooms/${state.roomId}`).update({
     status: 'loading',
-    currentQ: { ...q, cat, pts, startTime: null, loadingAt: Date.now() },
+    currentQ: { ...q, cat, pts, startTime: null, loadingAt: Date.now(), answerCounter: 0 },
     answers: null,
-    answerTimes: null
+    answerTimes: null,
+    answerOrders: null
   });
   // Add to used
   await db.ref(`rooms/${state.roomId}/usedQuestions`).push(q.id);
@@ -1015,6 +1019,7 @@ function renderQuestion() {
   if (!q) return;
   clearStageTimeout();
   const answers = room.answers || {};
+  const answerOrders = room.answerOrders || {};
   const myAnswer = answers[state.playerId];
   const players = room.players ? Object.values(room.players) : [];
   const allAnswered = players.every(p => answers[p.id] !== undefined);
@@ -1022,7 +1027,9 @@ function renderQuestion() {
   const options = parseOptions(q.options);
   const optionVotes = Object.fromEntries(options.map(opt => [
     opt,
-    players.filter(p => answers[p.id] === opt)
+    players
+      .filter(p => answers[p.id] === opt)
+      .sort((a, b) => Number(answerOrders[a.id] || Number.MAX_SAFE_INTEGER) - Number(answerOrders[b.id] || Number.MAX_SAFE_INTEGER))
   ]));
   const questionKey = getQuestionRoundKey(q);
 
@@ -1119,8 +1126,20 @@ function parseOptions(optStr) {
 }
 
 async function submitAnswer(ans) {
-  await db.ref(`rooms/${state.roomId}/answers/${state.playerId}`).set(ans);
-  await db.ref(`rooms/${state.roomId}/answerTimes/${state.playerId}`).set(Date.now());
+  const roomRef = db.ref(`rooms/${state.roomId}`);
+  await roomRef.transaction(room => {
+    if (!room || room.status !== 'question' || !room.currentQ || !state.playerId) return room;
+    room.answers = room.answers || {};
+    if (room.answers[state.playerId] !== undefined) return room;
+    room.answerTimes = room.answerTimes || {};
+    room.answerOrders = room.answerOrders || {};
+    const nextOrder = Number(room.currentQ.answerCounter || 0) + 1;
+    room.currentQ.answerCounter = nextOrder;
+    room.answers[state.playerId] = ans;
+    room.answerOrders[state.playerId] = nextOrder;
+    room.answerTimes[state.playerId] = Date.now();
+    return room;
+  });
 }
 
 async function evaluateAnswers(expectedQuestionKey = '') {
@@ -1159,6 +1178,7 @@ async function finalizeAnswerAnalysis(expectedQuestionKey = '') {
   const q = liveRoom.currentQ;
   const answers = liveRoom.answers || {};
   const answerTimes = liveRoom.answerTimes || {};
+  const answerOrders = liveRoom.answerOrders || {};
   const players = liveRoom.players ? Object.values(liveRoom.players) : [];
   const correctAnswer = q.answer || '';
   const ptsValue = Number(q.pts || q.points || 0);
@@ -1167,12 +1187,16 @@ async function finalizeAnswerAnalysis(expectedQuestionKey = '') {
   for (const p of players) {
     const ans = answers[p.id];
     if (ans && isCorrectAnswer(ans, correctAnswer)) {
-      correctPlayers.push({ ...p, time: answerTimes[p.id] || Infinity });
+      correctPlayers.push({
+        ...p,
+        order: Number(answerOrders[p.id] || Number.MAX_SAFE_INTEGER),
+        time: Number(answerTimes[p.id] || Number.MAX_SAFE_INTEGER)
+      });
     }
   }
 
   if (correctPlayers.length > 0) {
-    correctPlayers.sort((a, b) => a.time - b.time);
+    correctPlayers.sort((a, b) => (a.order - b.order) || (a.time - b.time));
     const fastest = correctPlayers[0];
     const newScore = Number(fastest.score || 0) + ptsValue;
     await db.ref(`rooms/${state.roomId}`).update({
@@ -1271,7 +1295,8 @@ async function proceedToNext() {
     turnIndex: nextIdx,
     currentQ: null,
     answers: null,
-    answerTimes: null
+    answerTimes: null,
+    answerOrders: null
   });
 }
 
@@ -1279,7 +1304,7 @@ async function proceedToNext() {
 function renderInlineChatPanel() {
   const msgs = state.chatMessages || [];
   return `
-    <div class="bg-white/95 rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
+    <div class="bg-white/95 rounded-t-2xl rounded-b-none shadow-xl border border-slate-200 overflow-hidden">
       <div class="flex items-center justify-between p-4 border-b border-slate-100">
         <h3 class="font-black text-lg text-slate-800">💬 المحادثة</h3>
         <span class="text-xs text-slate-400">${msgs.length} رسالة</span>
@@ -1326,9 +1351,9 @@ function renderWinner() {
 
   const app = getApp();
   app.innerHTML = `
-    <div class="h-full w-full overflow-auto p-4" style="background: linear-gradient(135deg, #fef9c3, #fde68a)">
+    <div class="h-full w-full overflow-auto px-4 pt-4 pb-0" style="background: linear-gradient(135deg, #fef9c3, #fde68a)">
       ${confettiHtml}
-      <div class="max-w-3xl mx-auto space-y-4">
+      <div class="max-w-3xl mx-auto min-h-full flex flex-col gap-4">
         <div class="bounce-in text-center bg-white/85 rounded-3xl p-6 shadow-2xl">
           <div class="text-6xl mb-2">👑</div>
           <div class="text-6xl mb-2">${winner?.emoji || '😎'}</div>
@@ -1346,7 +1371,9 @@ function renderWinner() {
             <p class="mt-6 text-sm font-bold text-slate-500">بانتظار المضيف لبدء لعبة جديدة</p>
           `}
         </div>
-        ${renderInlineChatPanel()}
+        <div class="mt-auto">
+          ${renderInlineChatPanel()}
+        </div>
       </div>
     </div>`;
 }
@@ -1377,6 +1404,7 @@ async function newGame() {
     currentQ: null,
     answers: null,
     answerTimes: null,
+    answerOrders: null,
     selectedCategories: null,
     allCategories: null,
     usedQuestions: null,
