@@ -96,7 +96,8 @@ let state = {
   stageTimeout: null,
   connectedRef: null,
   connectedCb: null,
-  evaluatingQuestionKey: ''
+  evaluatingQuestionKey: '',
+  serverTimeOffset: 0
 };
 
 const COLORS = [
@@ -137,6 +138,13 @@ function getApp() { return document.getElementById('app'); }
 function getQuestionRoundKey(q) {
   if (!q) return '';
   return [q.id || '', q.cat || '', q.pts || q.points || '', q.startTime || 'pending'].join('::');
+}
+function getAnswerChoice(answerEntry) {
+  if (typeof answerEntry === 'string') return answerEntry;
+  return answerEntry?.choice || '';
+}
+function estimatedServerNow() {
+  return Date.now() + Number(state.serverTimeOffset || 0);
 }
 function clearQuestionTimers() {
   clearInterval(state.timer);
@@ -366,16 +374,17 @@ function syncHostOverlay() {
 function scheduleQuestionReveal(expectedQuestionKey, delayMs) {
   clearStageTimeout();
   state.stageTimeout = setTimeout(async () => {
-    const roomSnap = await db.ref(`rooms/${state.roomId}`).once('value');
-    const liveRoom = roomSnap.val();
-    if (!liveRoom || liveRoom.status !== 'loading' || !liveRoom.currentQ) return;
-    if (getQuestionRoundKey(liveRoom.currentQ) !== expectedQuestionKey) return;
-    await db.ref(`rooms/${state.roomId}`).update({
-      status: 'question',
-      'currentQ/startTime': Date.now(),
-      answers: null,
-      answerTimes: null,
-      answerOrders: null
+    await db.ref(`rooms/${state.roomId}`).transaction(room => {
+      if (!room || room.status !== 'loading' || !room.currentQ) return room;
+      if (getQuestionRoundKey(room.currentQ) !== expectedQuestionKey) return room;
+      room.status = 'question';
+      room.currentQ.startTime = estimatedServerNow();
+      room.currentQ.answerCounter = 0;
+      room.currentQ.evaluatingAt = null;
+      room.answers = null;
+      room.answerTimes = null;
+      room.answerOrders = null;
+      return room;
     });
   }, Math.max(0, delayMs));
 }
@@ -423,6 +432,14 @@ async function removePlayerFromRoom(playerId, roomOverride = null) {
       updates.turnIndex = Math.max(0, nextTurnIndex % nextTurnOrder.length);
     } else {
       updates.turnIndex = 0;
+    }
+  }
+
+  if (room.status === 'question' && remainingPlayers.length > 1) {
+    const remainingAnswered = remainingPlayers.every(player => !!getAnswerChoice(room.answers?.[player.id]));
+    if (remainingAnswered) {
+      updates.status = 'evaluating';
+      updates['currentQ/evaluatingAt'] = estimatedServerNow();
     }
   }
 
@@ -963,7 +980,7 @@ async function selectQuestion(cat, pts) {
 
   await db.ref(`rooms/${state.roomId}`).update({
     status: 'loading',
-    currentQ: { ...q, cat, pts, startTime: null, loadingAt: Date.now(), answerCounter: 0 },
+    currentQ: { ...q, cat, pts, startTime: null, loadingAt: estimatedServerNow(), answerCounter: 0 },
     answers: null,
     answerTimes: null,
     answerOrders: null
@@ -972,7 +989,6 @@ async function selectQuestion(cat, pts) {
   await db.ref(`rooms/${state.roomId}/usedQuestions`).push(q.id);
 
   state.page = 'loading';
-  scheduleQuestionReveal(getQuestionRoundKey({ ...q, cat, pts, startTime: null }), 2500);
 }
 
 // ====== LOADING SCREEN ======
@@ -984,11 +1000,11 @@ function renderLoading() {
   const q = room.currentQ;
   if (!q) return;
   const isEvaluating = room.status === 'evaluating';
-  if (state.isHost && !isEvaluating) {
-    const loadingElapsed = q.loadingAt ? (Date.now() - q.loadingAt) : 2500;
+  if (!isEvaluating) {
+    const loadingElapsed = q.loadingAt ? (estimatedServerNow() - q.loadingAt) : 2500;
     scheduleQuestionReveal(getQuestionRoundKey(q), 2500 - loadingElapsed);
-  } else if (state.isHost && isEvaluating) {
-    const evaluatingElapsed = q.evaluatingAt ? (Date.now() - q.evaluatingAt) : 1600;
+  } else {
+    const evaluatingElapsed = q.evaluatingAt ? (estimatedServerNow() - q.evaluatingAt) : 1600;
     scheduleAnswerAnalysis(getQuestionRoundKey(q), 1600 - evaluatingElapsed);
   }
   const app = getApp();
@@ -1020,21 +1036,20 @@ function renderQuestion() {
   clearStageTimeout();
   const answers = room.answers || {};
   const answerOrders = room.answerOrders || {};
-  const myAnswer = answers[state.playerId];
+  const myAnswer = getAnswerChoice(answers[state.playerId]);
   const players = room.players ? Object.values(room.players) : [];
-  const allAnswered = players.every(p => answers[p.id] !== undefined);
+  const allAnswered = players.every(p => !!getAnswerChoice(answers[p.id]));
   // Parse options
   const options = parseOptions(q.options);
   const optionVotes = Object.fromEntries(options.map(opt => [
     opt,
     players
-      .filter(p => answers[p.id] === opt)
+      .filter(p => getAnswerChoice(answers[p.id]) === opt)
       .sort((a, b) => Number(answerOrders[a.id] || Number.MAX_SAFE_INTEGER) - Number(answerOrders[b.id] || Number.MAX_SAFE_INTEGER))
   ]));
-  const questionKey = getQuestionRoundKey(q);
 
   // Timer
-  const elapsed = q.startTime ? Math.floor((Date.now() - q.startTime) / 1000) : 0;
+  const elapsed = q.startTime ? Math.floor((estimatedServerNow() - q.startTime) / 1000) : 0;
   const remaining = Math.max(0, 40 - elapsed);
 
   const app = getApp();
@@ -1087,30 +1102,28 @@ function renderQuestion() {
   clearInterval(state.timer);
   if (remaining <= 0) {
     clearTimeout(state.answerEvalTimeout);
-    if (state.isHost) evaluateAnswers(questionKey);
+    evaluateAnswers(getQuestionRoundKey(q));
   } else if (!allAnswered) {
     clearTimeout(state.answerEvalTimeout);
     state.answerEvalTimeout = null;
     state.timer = setInterval(async () => {
       const el = document.getElementById('timerDisplay');
       if (!el) { clearInterval(state.timer); return; }
-      const now = Date.now();
+      const now = estimatedServerNow();
       const r = Math.max(0, 40 - Math.floor((now - q.startTime) / 1000));
       el.textContent = r;
       if (r <= 10) el.className = 'text-3xl font-black text-red-500';
       if (r <= 0) {
         clearInterval(state.timer);
-        if (state.isHost) evaluateAnswers(questionKey);
+        evaluateAnswers(getQuestionRoundKey(q));
       }
     }, 1000);
   }
   // Check if all answered
-  if (allAnswered && state.isHost) {
+  if (allAnswered) {
     clearInterval(state.timer);
     clearTimeout(state.answerEvalTimeout);
-    if (state.evaluatingQuestionKey !== questionKey) {
-      state.answerEvalTimeout = setTimeout(() => evaluateAnswers(questionKey), 400);
-    }
+    state.answerEvalTimeout = setTimeout(() => evaluateAnswers(getQuestionRoundKey(q)), 250);
   }
 }
 
@@ -1127,91 +1140,91 @@ function parseOptions(optStr) {
 
 async function submitAnswer(ans) {
   const roomRef = db.ref(`rooms/${state.roomId}`);
-  await roomRef.transaction(room => {
+  const tx = await roomRef.transaction(room => {
     if (!room || room.status !== 'question' || !room.currentQ || !state.playerId) return room;
     room.answers = room.answers || {};
-    if (room.answers[state.playerId] !== undefined) return room;
+    if (getAnswerChoice(room.answers[state.playerId])) return room;
     room.answerTimes = room.answerTimes || {};
     room.answerOrders = room.answerOrders || {};
     const nextOrder = Number(room.currentQ.answerCounter || 0) + 1;
+    const submittedAt = estimatedServerNow();
     room.currentQ.answerCounter = nextOrder;
-    room.answers[state.playerId] = ans;
+    room.answers[state.playerId] = {
+      choice: ans,
+      submittedAt
+    };
     room.answerOrders[state.playerId] = nextOrder;
-    room.answerTimes[state.playerId] = Date.now();
+    room.answerTimes[state.playerId] = submittedAt;
+
+    const totalPlayers = Object.keys(room.players || {}).length;
+    const totalAnswers = Object.values(room.answers || {}).filter(entry => !!getAnswerChoice(entry)).length;
+    if (totalPlayers > 0 && totalAnswers >= totalPlayers) {
+      room.status = 'evaluating';
+      room.currentQ.evaluatingAt = estimatedServerNow();
+    }
+    return room;
+  });
+  if (!tx.committed) showToast('تعذر إرسال الإجابة، حاول مرة أخرى');
+}
+
+async function evaluateAnswers(expectedQuestionKey = '') {
+  clearTimeout(state.answerEvalTimeout);
+  await db.ref(`rooms/${state.roomId}`).transaction(room => {
+    if (!room || room.status !== 'question' || !room.currentQ) return room;
+    const currentQuestionKey = getQuestionRoundKey(room.currentQ);
+    if (expectedQuestionKey && expectedQuestionKey !== currentQuestionKey) return room;
+    const answers = room.answers || {};
+    const players = room.players ? Object.values(room.players) : [];
+    const allAnswered = players.length > 0 && players.every(player => !!getAnswerChoice(answers[player.id]));
+    const elapsedMs = room.currentQ.startTime ? (estimatedServerNow() - room.currentQ.startTime) : 0;
+    if (!allAnswered && elapsedMs < 40000) return room;
+    room.status = 'evaluating';
+    room.currentQ.evaluatingAt = estimatedServerNow();
     return room;
   });
 }
 
-async function evaluateAnswers(expectedQuestionKey = '') {
-  const room = state.room;
-  if (!room || room.status !== 'question' || !room.currentQ) return;
-  const currentQuestionKey = getQuestionRoundKey(room.currentQ);
-  if (expectedQuestionKey && expectedQuestionKey !== currentQuestionKey) return;
-  if (state.evaluatingQuestionKey === currentQuestionKey) return;
-  state.evaluatingQuestionKey = currentQuestionKey;
-  clearTimeout(state.answerEvalTimeout);
-
-  const roomSnap = await db.ref(`rooms/${state.roomId}`).once('value');
-  const liveRoom = roomSnap.val();
-  if (!liveRoom || liveRoom.status !== 'question' || !liveRoom.currentQ) {
-    state.evaluatingQuestionKey = '';
-    return;
-  }
-  if (getQuestionRoundKey(liveRoom.currentQ) !== currentQuestionKey) {
-    state.evaluatingQuestionKey = '';
-    return;
-  }
-  await db.ref(`rooms/${state.roomId}`).update({
-    status: 'evaluating',
-    'currentQ/evaluatingAt': Date.now()
-  });
-  scheduleAnswerAnalysis(currentQuestionKey, 1600);
-}
-
 async function finalizeAnswerAnalysis(expectedQuestionKey = '') {
-  const roomSnap = await db.ref(`rooms/${state.roomId}`).once('value');
-  const liveRoom = roomSnap.val();
-  if (!liveRoom || liveRoom.status !== 'evaluating' || !liveRoom.currentQ) return;
-  const currentQuestionKey = getQuestionRoundKey(liveRoom.currentQ);
-  if (expectedQuestionKey && expectedQuestionKey !== currentQuestionKey) return;
+  await db.ref(`rooms/${state.roomId}`).transaction(room => {
+    if (!room || room.status !== 'evaluating' || !room.currentQ) return room;
+    const currentQuestionKey = getQuestionRoundKey(room.currentQ);
+    if (expectedQuestionKey && expectedQuestionKey !== currentQuestionKey) return room;
 
-  const q = liveRoom.currentQ;
-  const answers = liveRoom.answers || {};
-  const answerTimes = liveRoom.answerTimes || {};
-  const answerOrders = liveRoom.answerOrders || {};
-  const players = liveRoom.players ? Object.values(liveRoom.players) : [];
-  const correctAnswer = q.answer || '';
-  const ptsValue = Number(q.pts || q.points || 0);
+    const q = room.currentQ;
+    const answers = room.answers || {};
+    const answerTimes = room.answerTimes || {};
+    const answerOrders = room.answerOrders || {};
+    const players = room.players ? Object.values(room.players) : [];
+    const correctAnswer = q.answer || '';
+    const ptsValue = Number(q.pts || q.points || 0);
 
-  let correctPlayers = [];
-  for (const p of players) {
-    const ans = answers[p.id];
-    if (ans && isCorrectAnswer(ans, correctAnswer)) {
-      correctPlayers.push({
-        ...p,
-        order: Number(answerOrders[p.id] || Number.MAX_SAFE_INTEGER),
-        time: Number(answerTimes[p.id] || Number.MAX_SAFE_INTEGER)
-      });
+    const correctPlayers = players
+      .map(player => {
+        const answer = getAnswerChoice(answers[player.id]);
+        if (!answer || !isCorrectAnswer(answer, correctAnswer)) return null;
+        return {
+          ...player,
+          order: Number(answerOrders[player.id] || Number.MAX_SAFE_INTEGER),
+          time: Number(answerTimes[player.id] || Number.MAX_SAFE_INTEGER)
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => (a.order - b.order) || (a.time - b.time));
+
+    if (correctPlayers.length > 0) {
+      const fastest = correctPlayers[0];
+      room.players[fastest.id].score = Number(room.players[fastest.id].score || 0) + ptsValue;
+      room.board[q.cat][ptsValue] = fastest.color || '#22c55e';
+      room.status = 'result';
+      room.lastResult = { winner: fastest.name, emoji: fastest.emoji, pts: ptsValue, answer: correctAnswer };
+      return room;
     }
-  }
 
-  if (correctPlayers.length > 0) {
-    correctPlayers.sort((a, b) => (a.order - b.order) || (a.time - b.time));
-    const fastest = correctPlayers[0];
-    const newScore = Number(fastest.score || 0) + ptsValue;
-    await db.ref(`rooms/${state.roomId}`).update({
-      [`players/${fastest.id}/score`]: newScore,
-      [`board/${q.cat}/${ptsValue}`]: fastest.color || '#22c55e',
-      status: 'result',
-      lastResult: { winner: fastest.name, emoji: fastest.emoji, pts: ptsValue, answer: correctAnswer }
-    });
-  } else {
-    await db.ref(`rooms/${state.roomId}`).update({
-      [`board/${q.cat}/${ptsValue}`]: 'dark',
-      status: 'noAnswer',
-      lastResult: { pts: ptsValue, answer: correctAnswer }
-    });
-  }
+    room.board[q.cat][ptsValue] = 'dark';
+    room.status = 'noAnswer';
+    room.lastResult = { pts: ptsValue, answer: correctAnswer };
+    return room;
+  });
 }
 
 function isCorrectAnswer(given, correct) {
@@ -1240,11 +1253,8 @@ function renderResult() {
         <p class="text-xl text-green-600 font-bold mt-2">+${r.pts || 0} نقطة</p>
       </div>
     </div>`;
-  // Auto proceed after 3.5s
-  if (state.isHost) {
-    clearStageTimeout();
-    state.stageTimeout = setTimeout(() => proceedToNext(), 3500);
-  }
+  clearStageTimeout();
+  state.stageTimeout = setTimeout(() => proceedToNext('result'), 3500);
 }
 
 // ====== NO ANSWER ======
@@ -1265,38 +1275,42 @@ function renderNoAnswer() {
 	        <p class="text-2xl font-black text-red-700">لم يجب أحد بشكل صحيح!</p>
 	      </div>
 	    </div>`;
-  if (state.isHost) {
-    clearStageTimeout();
-    state.stageTimeout = setTimeout(() => proceedToNext(), 3000);
-  }
+  clearStageTimeout();
+  state.stageTimeout = setTimeout(() => proceedToNext('noAnswer'), 3000);
 }
 
-async function proceedToNext() {
-  const room = state.room;
-  if (!room) return;
-  const board = room.board || {};
-  // Check if all questions done
-  let allDone = true;
-  for (const cat of Object.keys(board)) {
-    for (const pts of [200, 400, 600]) {
-      if (board[cat]?.[pts] === 'open') { allDone = false; break; }
+async function proceedToNext(expectedStatus = '') {
+  await db.ref(`rooms/${state.roomId}`).transaction(room => {
+    if (!room || !['result', 'noAnswer'].includes(room.status)) return room;
+    if (expectedStatus && room.status !== expectedStatus) return room;
+    const board = room.board || {};
+    let allDone = true;
+    for (const cat of Object.keys(board)) {
+      for (const pts of [200, 400, 600]) {
+        if (board[cat]?.[pts] === 'open') {
+          allDone = false;
+          break;
+        }
+      }
+      if (!allDone) break;
     }
-    if (!allDone) break;
-  }
-  if (allDone) {
-    await db.ref(`rooms/${state.roomId}/status`).set('winner');
-    return;
-  }
-  // Next turn
-  const turnOrder = room.turnOrder || [];
-  const nextIdx = ((room.turnIndex || 0) + 1) % turnOrder.length;
-  await db.ref(`rooms/${state.roomId}`).update({
-    status: 'game',
-    turnIndex: nextIdx,
-    currentQ: null,
-    answers: null,
-    answerTimes: null,
-    answerOrders: null
+    if (allDone) {
+      room.status = 'winner';
+      room.currentQ = null;
+      room.answers = null;
+      room.answerTimes = null;
+      room.answerOrders = null;
+      return room;
+    }
+    const turnOrder = room.turnOrder || [];
+    if (!turnOrder.length) return room;
+    room.status = 'game';
+    room.turnIndex = ((room.turnIndex || 0) + 1) % turnOrder.length;
+    room.currentQ = null;
+    room.answers = null;
+    room.answerTimes = null;
+    room.answerOrders = null;
+    return room;
   });
 }
 
@@ -1657,6 +1671,9 @@ function showToast(msg) {
 
 // Init
 (async () => {
+  firebase.database().ref('.info/serverTimeOffset').on('value', snap => {
+    state.serverTimeOffset = Number(snap.val() || 0);
+  });
   await loadQuestionsFromFirebase();
   const restored = await restoreRoomSession();
   if (!restored) checkUrlForRoom();
