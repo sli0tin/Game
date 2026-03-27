@@ -99,7 +99,9 @@ let state = {
   connectedRef: null,
   connectedCb: null,
   evaluatingQuestionKey: '',
-  serverTimeOffset: 0
+  serverTimeOffset: 0,
+  chatDraft: '',
+  lettersWinnerPickerOpen: false
 };
 
 const COLORS = [
@@ -115,6 +117,12 @@ const PLAYER_EMOJIS = ['😎', '🤩', '😏', '🧐'];
 const LETTERS_ALPHABET = ['أ', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'ه', 'و', 'ي'];
 const LETTERS_BOARD_SIZE = 25;
 const REQUIRED_BOARD_LETTER = 'أ';
+const LETTERS_PLAYER_LIMIT = 4;
+const LETTERS_TEAM_LIMIT = 2;
+const LETTERS_TEAMS = [
+  { id: 'green', name: 'الفريق الأخضر', hex: '#16a34a', soft: '#dcfce7' },
+  { id: 'red', name: 'الفريق الأحمر', hex: '#ef4444', soft: '#fee2e2' }
+];
 
 let clickTimes = [];
 let defaultConfig = { game_title: 'الميدان' };
@@ -173,6 +181,58 @@ function getLettersQuestionsForLetter(letter) {
   const normalized = normalizeLettersLetter(letter);
   return state.questions.filter(q => normalizeLettersLetter(q.letter) === normalized);
 }
+function escapeHtml(value = '') {
+  return (value || '').toString()
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+function getLettersTeamMeta(team) {
+  return LETTERS_TEAMS.find(item => item.id === team) || LETTERS_TEAMS[0];
+}
+function getLettersManager(room = state.room) {
+  const players = room?.players ? Object.values(room.players) : [];
+  return players.find(player => player.role === 'manager' || player.id === room?.host) || null;
+}
+function getLettersPlayers(room = state.room) {
+  const players = room?.players ? Object.values(room.players) : [];
+  return players.filter(player => (player.role || 'player') !== 'manager');
+}
+function getLettersTeamMembers(team, room = state.room) {
+  return getLettersPlayers(room).filter(player => player.team === team);
+}
+function getLettersPlayerCount(room = state.room) {
+  return getLettersPlayers(room).length;
+}
+function rememberChatDraft(value) {
+  state.chatDraft = value;
+}
+function getActiveChatInputId() {
+  const active = document.activeElement;
+  return active?.id || '';
+}
+function restoreChatInputFocus(inputId = '') {
+  if (!inputId) return;
+  setTimeout(() => {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    input.focus();
+    const length = input.value.length;
+    if (typeof input.setSelectionRange === 'function') input.setSelectionRange(length, length);
+  }, 0);
+}
+function renderLettersTeamChips(room = state.room, compact = false) {
+  return LETTERS_TEAMS.map(team => {
+    const members = getLettersTeamMembers(team.id, room);
+    return `
+      <div class="rounded-2xl px-3 py-2 ${compact ? '' : 'min-w-[150px]'}" style="background:${team.soft};border:2px solid ${team.hex}">
+        <p class="font-black text-sm" style="color:${team.hex}">${team.name}</p>
+        <p class="text-xs text-slate-500 mt-1">${members.length ? members.map(player => player.name).join(' • ') : 'لا يوجد لاعبون بعد'}</p>
+      </div>`;
+  }).join('');
+}
 function getQuestionRoundKey(q) {
   if (!q) return '';
   return [q.id || '', q.cat || '', q.pts || q.points || '', q.startTime || 'pending'].join('::');
@@ -194,8 +254,16 @@ function clearStageTimeout() {
   clearTimeout(state.stageTimeout);
   state.stageTimeout = null;
 }
+function getRoutePagePath(game = state.gameMode) {
+  const path = window.location.pathname;
+  const baseDir = /\.[a-z0-9]+$/i.test(path)
+    ? path.replace(/[^/]+$/, '')
+    : (path.endsWith('/') ? path : `${path}/`);
+  return `${baseDir}${game === 'letters' ? 'letters.html' : 'index.html'}`;
+}
 function buildRouteUrl({ game = state.gameMode, room = '', panel = '', token = '' } = {}) {
   const linkUrl = new URL(window.location.href);
+  linkUrl.pathname = getRoutePagePath(game);
   linkUrl.search = '';
   linkUrl.hash = '';
   if (game) linkUrl.searchParams.set('game', game);
@@ -308,9 +376,11 @@ function resetRoomState({ markOffline = false, clearSession = true } = {}) {
     room: null,
     chatOpen: false,
     chatMessages: [],
+    chatDraft: '',
     unreadCount: 0,
     hostPanelOpen: false,
-    evaluatingQuestionKey: ''
+    evaluatingQuestionKey: '',
+    lettersWinnerPickerOpen: false
   };
   window.history.replaceState({}, '', state.gameMode ? buildModeLink(state.gameMode) : window.location.pathname);
   renderCurrentPage();
@@ -460,6 +530,18 @@ async function removePlayerFromRoom(playerId, roomOverride = null) {
   const roomRef = getGameRoomRef(roomId, roomOverride || state.room);
   const room = roomOverride?.players ? roomOverride : state.room || (await roomRef.once('value')).val();
   if (!room?.players?.[playerId]) return false;
+
+  if (room.game === 'letters') {
+    if (playerId === room.host) {
+      await roomRef.remove();
+      return true;
+    }
+    await roomRef.update({
+      [`players/${playerId}`]: null,
+      [`presence/${playerId}`]: null
+    });
+    return true;
+  }
 
   const remainingPlayers = Object.values(room.players).filter(p => p.id !== playerId);
   if (remainingPlayers.length === 0) {
@@ -629,6 +711,7 @@ async function loadQuestionsFromFirebase() {
 
 // Render router
 function renderCurrentPage() {
+  const activeChatInputId = getActiveChatInputId();
   switch (state.page) {
     case 'home': renderHome(); break;
     case 'admin': renderAdmin(); break;
@@ -648,13 +731,17 @@ function renderCurrentPage() {
   lucide.createIcons();
   syncExitOverlay();
   syncHostOverlay();
-  if (state.page === 'winner') {
+  if (isLettersMode() && ['game', 'winner'].includes(state.page)) {
+    state.unreadCount = 0;
+    scrollMessagesToBottom('lettersGameChatMessages');
+  } else if (state.page === 'winner') {
     state.unreadCount = 0;
     scrollMessagesToBottom('winnerChatMessages');
   } else if (state.chatOpen) {
     state.unreadCount = 0;
     scrollMessagesToBottom('chatMessages');
   }
+  restoreChatInputFocus(activeChatInputId);
 }
 
 async function restoreRoomSession() {
@@ -730,7 +817,11 @@ function selectGame(game) {
 function goLanding() {
   state.gameMode = '';
   state.page = 'home';
-  window.history.replaceState({}, '', window.location.pathname);
+  const landingUrl = new URL(window.location.href);
+  landingUrl.pathname = getRoutePagePath('quiz');
+  landingUrl.search = '';
+  landingUrl.hash = '';
+  window.history.replaceState({}, '', landingUrl.toString());
   renderCurrentPage();
 }
 
@@ -905,9 +996,14 @@ async function createLettersRoom() {
     managerKey: genId() + genId(),
     liveKey: genId() + genId(),
     players: {
-      [state.playerId]: { name, id: state.playerId, emoji: PLAYER_EMOJIS[0], color: '', score: 0, ready: false }
+      [state.playerId]: { name, id: state.playerId, emoji: '🎛️', color: '', score: 0, ready: true, role: 'manager', team: '' }
     },
-    letters: boardState,
+    letters: {
+      ...boardState,
+      showQuestionInLive: false,
+      winnerTeam: '',
+      winnerAt: null
+    },
     created: Date.now()
   };
   await getLettersRoomRef(state.roomId).set(roomData);
@@ -925,8 +1021,9 @@ async function joinLettersRoom() {
   const snap = await getLettersRoomRef(state.roomId).once('value');
   const room = snap.val();
   if (!room) { showToast('الغرفة غير موجودة'); return; }
-  const playerCount = room.players ? Object.keys(room.players).length : 0;
-  if (playerCount >= 8) { showToast('الغرفة ممتلئة'); return; }
+  const playerCount = getLettersPlayerCount(room);
+  if (room.status !== 'lobby') { showToast('بدأت اللعبة بالفعل'); return; }
+  if (playerCount >= LETTERS_PLAYER_LIMIT) { showToast(`الغرفة ممتلئة (${LETTERS_PLAYER_LIMIT}/${LETTERS_PLAYER_LIMIT})`); return; }
   state.playerName = name;
   state.playerId = genId();
   state.isHost = false;
@@ -934,7 +1031,7 @@ async function joinLettersRoom() {
   state.hostPanelOpen = false;
   const idx = playerCount;
   await getLettersRoomRef(state.roomId).child('players/' + state.playerId).set({
-    name, id: state.playerId, emoji: PLAYER_EMOJIS[idx % PLAYER_EMOJIS.length] || '😀', color: '', score: 0, ready: false
+    name, id: state.playerId, emoji: PLAYER_EMOJIS[idx % PLAYER_EMOJIS.length] || '😀', color: '', score: 0, ready: false, role: 'player', team: ''
   });
   listenLettersRoom(state.roomId);
   startPresenceTracking();
@@ -1078,7 +1175,13 @@ function getLettersLiveLink(room = state.room) {
 function renderLettersLobby() {
   const room = state.room;
   if (!room) return;
-  const players = room.players ? Object.values(room.players) : [];
+  if (room.status && room.status !== 'lobby') {
+    state.page = room.status;
+    renderCurrentPage();
+    return;
+  }
+  const players = getLettersPlayers(room);
+  const manager = getLettersManager(room);
   const joinLink = getLettersPlayerLink(room.id);
   const managerLink = getLettersManagerLink(room);
   const liveLink = getLettersLiveLink(room);
@@ -1088,24 +1191,31 @@ function renderLettersLobby() {
       <div class="fade-in text-center max-w-3xl w-full">
         <h2 class="text-3xl font-black text-emerald-700 mb-1">🔤 ميدان الحروف</h2>
         <p class="text-gray-400 mb-4">غرفة الحروف</p>
-        <div class="grid gap-4 md:grid-cols-3 mb-4">
-          ${[
-            { title: 'رابط اللاعبين', value: joinLink, bg: 'from-emerald-500 to-teal-500' },
-            { title: 'رابط المدير', value: managerLink, bg: 'from-amber-500 to-orange-500' },
-            { title: 'رابط البث المباشر', value: liveLink, bg: 'from-rose-500 to-red-500' }
-          ].map(item => `
-            <div class="bg-white rounded-2xl shadow-lg p-4 text-right">
-              <div class="h-2 rounded-full bg-gradient-to-l ${item.bg} mb-3"></div>
-              <p class="text-sm font-black text-slate-700 mb-2">${item.title}</p>
-              <input readonly value="${item.value}" class="w-full px-3 py-2 bg-slate-50 rounded-lg text-[11px] text-slate-600 outline-none mb-2">
-              <button onclick="navigator.clipboard.writeText('${item.value}');showToast('تم نسخ الرابط')" class="w-full py-2 rounded-xl bg-slate-900 text-white text-sm font-black hover:bg-slate-800 transition">نسخ الرابط</button>
-            </div>
-          `).join('')}
-        </div>
+        ${state.isHost ? `
+          <div class="grid gap-4 md:grid-cols-3 mb-4">
+            ${[
+              { title: 'رابط اللاعبين', value: joinLink, bg: 'from-emerald-500 to-teal-500' },
+              { title: 'رابط المدير', value: managerLink, bg: 'from-amber-500 to-orange-500' },
+              { title: 'رابط البث المباشر', value: liveLink, bg: 'from-rose-500 to-red-500' }
+            ].map(item => `
+              <div class="bg-white rounded-2xl shadow-lg p-4 text-right">
+                <div class="h-2 rounded-full bg-gradient-to-l ${item.bg} mb-3"></div>
+                <p class="text-sm font-black text-slate-700 mb-2">${item.title}</p>
+                <input readonly value="${item.value}" class="w-full px-3 py-2 bg-slate-50 rounded-lg text-[11px] text-slate-600 outline-none mb-2">
+                <button onclick="navigator.clipboard.writeText('${item.value}');showToast('تم نسخ الرابط')" class="w-full py-2 rounded-xl bg-slate-900 text-white text-sm font-black hover:bg-slate-800 transition">نسخ الرابط</button>
+              </div>
+            `).join('')}
+          </div>
+        ` : ''}
         <div class="bg-white rounded-2xl shadow-lg p-5 mb-4">
           <div class="flex items-center justify-between mb-3">
             <span class="text-sm text-gray-500">رمز الغرفة</span>
             <span class="text-2xl font-black tracking-widest text-emerald-600">${state.roomId}</span>
+          </div>
+          <div class="mb-4 p-3 rounded-2xl bg-amber-50 border border-amber-200 text-right">
+            <p class="text-sm font-black text-amber-700">مدير اللعبة</p>
+            <p class="text-slate-700 font-bold mt-1">${manager?.emoji || '🎛️'} ${manager?.name || '—'}</p>
+            ${manager ? renderPresenceBadge(manager.id, false) : ''}
           </div>
           <div class="flex justify-center gap-6 flex-wrap">
             ${players.map(p => `
@@ -1113,15 +1223,20 @@ function renderLettersLobby() {
                 <div class="text-4xl mb-1">${p.emoji}</div>
                 <p class="text-sm font-bold ${p.id === state.playerId ? 'text-emerald-600' : 'text-gray-700'}">${p.name}</p>
                 ${renderPresenceBadge(p.id)}
-                ${p.id === room.host ? '<span class="text-xs text-amber-500">👑 المضيف</span>' : ''}
+                ${p.team ? `<span class="text-xs font-black mt-1 inline-block" style="color:${getLettersTeamMeta(p.team).hex}">${getLettersTeamMeta(p.team).name}</span>` : '<span class="text-xs text-slate-400">بانتظار اختيار الفريق</span>'}
               </div>
             `).join('')}
           </div>
         </div>
-        <div class="flex flex-col md:flex-row gap-3 justify-center">
-          ${state.isHost ? `<a href="${managerLink}" target="_blank" rel="noopener noreferrer" class="px-6 py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-black transition">فتح لوحة المدير</a>` : ''}
-          <a href="${liveLink}" target="_blank" rel="noopener noreferrer" class="px-6 py-3 bg-rose-500 hover:bg-rose-600 text-white rounded-xl font-black transition">فتح البث المباشر</a>
-        </div>
+        ${state.isHost ? `
+          <div class="flex flex-col md:flex-row gap-3 justify-center">
+            <a href="${managerLink}" target="_blank" rel="noopener noreferrer" class="px-6 py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-black transition">فتح لوحة المدير</a>
+            <button onclick="goColorPick()" class="px-6 py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-black transition ${players.length < 2 ? 'opacity-50 cursor-not-allowed' : ''}" ${players.length < 2 ? 'disabled' : ''}>بدء اللعبة</button>
+          </div>
+          ${players.length < 2 ? '<p class="mt-3 text-sm text-slate-400">يلزم لاعبان على الأقل قبل البدء.</p>' : ''}
+        ` : `
+          <p class="text-gray-500 text-sm font-bold">بانتظار منشئ الغرفة لبدء اللعبة</p>
+        `}
       </div>
     </div>`;
 }
@@ -1260,6 +1375,20 @@ async function listenLettersRoom(roomId) {
       persistRoomSession();
       setRoomUrl(data.id || state.roomId);
     }
+    if (data.chat) {
+      const msgs = Object.values(data.chat).sort((a, b) => Number(a.time || 0) - Number(b.time || 0));
+      const chatVisible = ['game', 'winner', 'lettersLive'].includes(state.page) || state.chatOpen;
+      if (!chatVisible) {
+        const newCount = msgs.length - state.chatMessages.length;
+        if (newCount > 0) state.unreadCount += newCount;
+      } else {
+        state.unreadCount = 0;
+      }
+      state.chatMessages = msgs;
+    } else {
+      state.chatMessages = [];
+      state.unreadCount = 0;
+    }
     renderCurrentPage();
   });
   state.listeners.push({ ref, cb });
@@ -1292,6 +1421,10 @@ async function bootstrapLettersPanel(roomId, panel, token) {
 async function selectLettersCell(cellId) {
   const room = state.room;
   if (!room || state.page !== 'lettersManager') return;
+  if (room.status !== 'game') {
+    showToast('ابدأ اللعبة أولًا');
+    return;
+  }
   const cell = room.letters?.cells?.[cellId];
   if (!cell || cell.owner) return;
   if (!state.questions.length) await loadQuestionsFromFirebase();
@@ -1326,7 +1459,10 @@ async function claimLettersCell(team) {
   await getLettersRoomRef().update({
     [`letters/cells/${currentCellId}/owner`]: team,
     [`letters/usedQuestionIds/${currentQuestion.id}`]: true,
-    [`letters/currentQuestion/claimedBy`]: team
+    [`letters/currentQuestion/claimedBy`]: team,
+    'letters/currentCellId': '',
+    'letters/currentQuestion': null,
+    'letters/showQuestionInLive': false
   });
 }
 
@@ -1334,14 +1470,181 @@ async function clearLettersSelection() {
   if (!state.roomId) return;
   await getLettersRoomRef().child('letters').update({
     currentCellId: '',
-    currentQuestion: null
+    currentQuestion: null,
+    showQuestionInLive: false
   });
+}
+
+async function toggleLettersQuestionBroadcast() {
+  const room = state.room;
+  const currentQuestion = room?.letters?.currentQuestion;
+  if (!currentQuestion?.id) {
+    showToast('اختر حرفًا وسؤالًا أولًا');
+    return;
+  }
+  await getLettersRoomRef().child('letters/showQuestionInLive').set(!room?.letters?.showQuestionInLive);
+}
+
+function toggleLettersWinnerPicker(forceState) {
+  state.lettersWinnerPickerOpen = typeof forceState === 'boolean' ? forceState : !state.lettersWinnerPickerOpen;
+  if (state.page === 'lettersManager') renderLettersManager();
+}
+
+async function announceLettersWinner(team) {
+  const teamMeta = getLettersTeamMeta(team);
+  if (!window.confirm(`إعلان فوز ${teamMeta.name}؟`)) return;
+  state.lettersWinnerPickerOpen = false;
+  await getLettersRoomRef().update({
+    status: 'winner',
+    'letters/showQuestionInLive': false,
+    'letters/currentCellId': '',
+    'letters/currentQuestion': null,
+    'letters/winnerTeam': team,
+    'letters/winnerAt': firebase.database.ServerValue.TIMESTAMP
+  });
+}
+
+async function restartLettersRoom() {
+  await loadQuestionsFromFirebase();
+  const boardState = buildLettersBoardState();
+  if (!boardState) {
+    showToast('يلزم توفر 25 حرفًا مختلفًا مع الألف لإعادة اللعبة');
+    return;
+  }
+  const room = state.room;
+  const updates = {
+    status: 'lobby',
+    letters: {
+      ...boardState,
+      showQuestionInLive: false,
+      winnerTeam: '',
+      winnerAt: null
+    }
+  };
+  Object.values(room?.players || {}).forEach(player => {
+    const isManager = (player.role || 'player') === 'manager';
+    updates[`players/${player.id}/team`] = '';
+    updates[`players/${player.id}/color`] = '';
+    updates[`players/${player.id}/ready`] = isManager;
+  });
+  state.lettersWinnerPickerOpen = false;
+  await getLettersRoomRef().update(updates);
+}
+
+function renderLettersBroadcastQuestionCard(room = state.room, compact = false) {
+  const q = room?.letters?.currentQuestion;
+  if (!q) return '';
+  return `
+    <div class="mx-auto ${compact ? 'max-w-xl' : 'max-w-2xl'} bg-white rounded-[2rem] shadow-2xl border border-amber-100 p-5 md:p-7 text-center">
+      <p class="text-sm font-black tracking-[0.25em] text-amber-500 mb-3">السؤال المعروض</p>
+      <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-amber-100 text-4xl font-black text-amber-600 mb-4">${q.letter || '؟'}</div>
+      <p class="${compact ? 'text-xl leading-10' : 'text-3xl leading-[1.9]'} font-black text-slate-900">${q.question}</p>
+    </div>`;
+}
+
+function renderLettersWinnerSplash(room = state.room) {
+  const team = room?.letters?.winnerTeam;
+  if (!team) return '';
+  const teamMeta = getLettersTeamMeta(team);
+  const members = getLettersTeamMembers(team, room);
+  let confetti = '';
+  for (let i = 0; i < 18; i++) {
+    confetti += `<div class="confetti-piece" style="left:${Math.random() * 100}%;animation-delay:${Math.random() * 1.5}s;width:${8 + (Math.random() * 10)}px;height:${8 + (Math.random() * 10)}px;background:${teamMeta.hex};border-radius:${Math.random() > 0.5 ? '50%' : '3px'}"></div>`;
+  }
+  return `
+    <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+      ${confetti}
+      <div class="mx-4 rounded-[2rem] px-6 py-5 text-center shadow-2xl border-4" style="background:${teamMeta.soft};border-color:${teamMeta.hex}">
+        <p class="text-sm font-black tracking-[0.25em]" style="color:${teamMeta.hex}">الفائز</p>
+        <h3 class="text-4xl font-black mt-2" style="color:${teamMeta.hex}">${teamMeta.name}</h3>
+        <p class="text-sm text-slate-600 mt-2">${members.length ? members.map(player => player.name).join(' • ') : 'تم إعلان النتيجة'}</p>
+      </div>
+    </div>`;
+}
+
+function renderLettersStageContent(room = state.room, compact = false) {
+  const showQuestion = !!(room?.letters?.showQuestionInLive && room?.letters?.currentQuestion);
+  const body = showQuestion
+    ? renderLettersBroadcastQuestionCard(room, compact)
+    : `<div class="mx-auto ${compact ? 'max-w-[430px]' : 'max-w-[720px]'}">${renderLettersBoard(room, { interactive: false })}</div>`;
+  return `
+    <div class="relative">
+      ${body}
+      ${room?.status === 'winner' ? renderLettersWinnerSplash(room) : ''}
+    </div>`;
+}
+
+function renderLettersGameChatPanel() {
+  const msgs = state.chatMessages || [];
+  return `
+    <div class="bg-white rounded-[2rem] shadow-xl border border-slate-200 overflow-hidden flex flex-col min-h-[320px]">
+      <div class="flex items-center justify-between p-4 border-b border-slate-100">
+        <h3 class="font-black text-lg text-slate-800">💬 الدردشة المباشرة</h3>
+        <span class="text-xs text-slate-400">${msgs.length} رسالة</span>
+      </div>
+      <div class="flex-1 overflow-auto p-4 space-y-2" id="lettersGameChatMessages">
+        ${msgs.length === 0 ? '<p class="text-slate-400 text-sm text-center py-8">ابدأوا الدردشة أثناء اللعب</p>' : ''}
+        ${msgs.map(msg => `
+          <div class="text-sm ${msg.senderId === state.playerId ? 'text-left' : 'text-right'}">
+            <span class="font-black text-emerald-600">${escapeHtml(msg.senderName)}</span>
+            <p class="bg-slate-100 inline-block px-3 py-2 rounded-2xl mt-1 text-slate-700">${escapeHtml(msg.text)}</p>
+          </div>
+        `).join('')}
+      </div>
+      <form onsubmit="sendChat(event, 'lettersChatInput')" class="p-3 border-t border-slate-100 flex gap-2">
+        <input id="lettersChatInput" value="${escapeHtml(state.chatDraft)}" oninput="rememberChatDraft(this.value)" type="text" placeholder="اكتب رسالة..." class="flex-1 px-3 py-2 border rounded-xl outline-none focus:border-emerald-400" maxlength="200">
+        <button type="submit" class="px-4 py-2 bg-emerald-500 text-white rounded-xl font-black hover:bg-emerald-600 transition">إرسال</button>
+      </form>
+    </div>`;
+}
+
+function renderLettersGame() {
+  const room = state.room;
+  if (!room) return;
+  if (!['game', 'winner'].includes(room.status)) {
+    state.page = room.status;
+    renderCurrentPage();
+    return;
+  }
+  const players = getLettersPlayers(room);
+  const manager = getLettersManager(room);
+  const myPlayer = players.find(player => player.id === state.playerId);
+  const app = getApp();
+  app.innerHTML = `
+    <div class="min-h-full w-full p-4 md:p-6" style="background:linear-gradient(180deg,#f8fafc,#eef2ff)">
+      <div class="max-w-5xl mx-auto space-y-4">
+        <div class="bg-white/90 rounded-[2rem] shadow-lg border border-slate-200 p-4 text-right">
+          <div class="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <p class="text-xs font-black tracking-[0.25em] text-emerald-500">البث المباشر</p>
+              <h2 class="text-2xl font-black text-slate-900 mt-1">ميدان الحروف</h2>
+              <p class="text-sm text-slate-500 mt-1">المدير: ${manager?.name || '—'}</p>
+            </div>
+            <div class="flex flex-wrap gap-2 justify-end">
+              ${renderLettersTeamChips(room, true)}
+            </div>
+          </div>
+          ${myPlayer ? `<p class="mt-3 text-sm font-black" style="color:${getLettersTeamMeta(myPlayer.team || 'green').hex}">${myPlayer.team ? `أنت ضمن ${getLettersTeamMeta(myPlayer.team).name}` : 'أنت داخل الغرفة بانتظار اختيار الفريق'}</p>` : ''}
+          ${state.isHost ? `<div class="mt-3 flex flex-wrap gap-2"><a href="${getLettersManagerLink(room)}" target="_blank" rel="noopener noreferrer" class="px-4 py-2 bg-amber-500 text-white rounded-xl text-sm font-black hover:bg-amber-600 transition">فتح لوحة المدير</a><a href="${getLettersLiveLink(room)}" target="_blank" rel="noopener noreferrer" class="px-4 py-2 bg-slate-900 text-white rounded-xl text-sm font-black hover:bg-slate-800 transition">فتح البث الخارجي</a></div>` : ''}
+        </div>
+        <div class="bg-white/70 rounded-[2rem] border border-slate-200 shadow-xl p-4 md:p-5">
+          ${renderLettersStageContent(room, true)}
+        </div>
+        ${renderLettersGameChatPanel()}
+      </div>
+    </div>`;
+}
+
+function renderLettersWinner() {
+  renderLettersGame();
 }
 
 function renderLettersManager() {
   const room = state.room;
   if (!room) return;
   const q = room.letters?.currentQuestion;
+  const showInLive = !!room.letters?.showQuestionInLive;
+  const winnerMeta = room.letters?.winnerTeam ? getLettersTeamMeta(room.letters.winnerTeam) : null;
   const app = getApp();
   app.innerHTML = `
     <div class="min-h-full w-full p-4 md:p-6" style="background:linear-gradient(135deg,#f8fafc,#ecfccb)">
@@ -1349,15 +1652,19 @@ function renderLettersManager() {
         <div class="text-center">
           <p class="text-sm font-black tracking-[0.2em] text-emerald-700 mb-2">لوحة المدير</p>
           <h2 class="text-4xl font-black text-slate-900">ميدان الحروف</h2>
+          <p class="text-sm text-slate-500 mt-2">${room.status === 'lobby' ? 'بانتظار بدء اللعبة من صفحة الغرفة' : room.status === 'colorPick' ? 'بانتظار اكتمال اختيار الفرق' : room.status === 'winner' ? `تم إعلان فوز ${winnerMeta?.name || ''}` : 'اختر حرفًا ثم اعرض السؤال أو احتسبه لأحد الفريقين'}</p>
         </div>
-        ${renderLettersBoard(room, { interactive: true })}
+        ${renderLettersBoard(room, { interactive: room.status === 'game' })}
         <div class="bg-white rounded-3xl shadow-xl p-5">
           <div class="flex items-center justify-between gap-3 flex-wrap mb-4">
             <div>
               <p class="text-sm text-slate-400">الحرف المختار</p>
               <p class="text-2xl font-black text-slate-900">${q?.letter || '—'}</p>
             </div>
-            <button onclick="clearLettersSelection()" class="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-black hover:bg-slate-200 transition">إلغاء التحديد</button>
+            <div class="flex flex-wrap gap-2">
+              <button onclick="clearLettersSelection()" class="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-black hover:bg-slate-200 transition">إلغاء التحديد</button>
+              <button onclick="toggleLettersQuestionBroadcast()" class="px-4 py-2 rounded-xl ${showInLive ? 'bg-slate-900 text-white hover:bg-slate-800' : 'bg-amber-100 text-amber-700 hover:bg-amber-200'} font-black transition ${q ? '' : 'opacity-50 cursor-not-allowed'}" ${q ? '' : 'disabled'}>${showInLive ? 'إخفاء من البث' : 'عرض في البث'}</button>
+            </div>
           </div>
           <div class="min-h-[110px] rounded-2xl bg-slate-50 p-4 border border-slate-200">
             ${q ? `
@@ -1370,9 +1677,19 @@ function renderLettersManager() {
           <div class="mt-4">
             <p class="text-sm font-black text-slate-500 mb-3">من الذي أجاب؟</p>
             <div class="grid md:grid-cols-2 gap-3">
-              <button onclick="claimLettersCell('green')" class="py-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-lg transition">الفريق الأخضر</button>
-              <button onclick="claimLettersCell('red')" class="py-4 rounded-2xl bg-red-600 hover:bg-red-700 text-white font-black text-lg transition">الفريق الأحمر</button>
+              <button onclick="claimLettersCell('green')" class="py-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-lg transition ${room.status === 'game' && q ? '' : 'opacity-50 cursor-not-allowed'}" ${room.status === 'game' && q ? '' : 'disabled'}>الفريق الأخضر</button>
+              <button onclick="claimLettersCell('red')" class="py-4 rounded-2xl bg-red-600 hover:bg-red-700 text-white font-black text-lg transition ${room.status === 'game' && q ? '' : 'opacity-50 cursor-not-allowed'}" ${room.status === 'game' && q ? '' : 'disabled'}>الفريق الأحمر</button>
             </div>
+          </div>
+          <div class="mt-5 pt-5 border-t border-slate-200 flex flex-wrap items-center gap-3 justify-between">
+            <div class="flex items-center gap-2 flex-wrap">
+              <button onclick="toggleLettersWinnerPicker()" class="px-4 py-2 rounded-xl bg-slate-900 text-white text-sm font-black hover:bg-slate-800 transition">إعلان الفوز</button>
+              ${state.lettersWinnerPickerOpen ? `
+                <button onclick="announceLettersWinner('green')" class="px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-black hover:bg-emerald-700 transition">فوز الأخضر</button>
+                <button onclick="announceLettersWinner('red')" class="px-3 py-2 rounded-xl bg-red-600 text-white text-sm font-black hover:bg-red-700 transition">فوز الأحمر</button>
+              ` : ''}
+            </div>
+            <button onclick="restartLettersRoom()" class="px-4 py-2 rounded-xl bg-indigo-500 text-white text-sm font-black hover:bg-indigo-600 transition">إعادة اللعبة</button>
           </div>
         </div>
       </div>
@@ -1385,19 +1702,84 @@ function renderLettersLive() {
   const app = getApp();
   app.innerHTML = `
     <div class="min-h-full w-full flex items-center justify-center p-3 md:p-6" style="background:radial-gradient(circle at top,#f8fafc,#e2e8f0)">
-      <div class="w-full max-w-6xl">
-        ${renderLettersBoard(room, { interactive: false })}
+      <div class="w-full max-w-5xl">
+        ${renderLettersStageContent(room, false)}
       </div>
     </div>`;
 }
 
 async function goColorPick() {
+  if (isLettersMode()) {
+    await goLettersColorPick();
+    return;
+  }
   await db.ref('rooms/' + state.roomId + '/status').set('colorPick');
   state.page = 'colorPick';
 }
 
+async function goLettersColorPick() {
+  const room = state.room;
+  if (!room) return;
+  const updates = { status: 'colorPick' };
+  getLettersPlayers(room).forEach(player => {
+    updates[`players/${player.id}/team`] = '';
+    updates[`players/${player.id}/color`] = '';
+    updates[`players/${player.id}/ready`] = false;
+  });
+  await getLettersRoomRef().update(updates);
+  state.page = 'colorPick';
+}
+
+async function pickLettersTeam(teamId) {
+  const teamMeta = getLettersTeamMeta(teamId);
+  const tx = await getLettersRoomRef().child('players').transaction(players => {
+    if (!players?.[state.playerId]) return players;
+    const me = players[state.playerId];
+    if ((me.role || 'player') === 'manager') return players;
+    const currentTeam = me.team || '';
+    const taken = Object.values(players).filter(player =>
+      (player.role || 'player') !== 'manager' &&
+      player.id !== state.playerId &&
+      player.team === teamId
+    ).length;
+    if (currentTeam !== teamId && taken >= LETTERS_TEAM_LIMIT) return;
+    me.team = teamId;
+    me.color = teamMeta.hex;
+    me.ready = true;
+    players[state.playerId] = me;
+    return players;
+  });
+  if (!tx.committed) showToast('تعذر اختيار الفريق الآن');
+}
+
+async function startLettersGame() {
+  const room = state.room;
+  const players = getLettersPlayers(room);
+  if (players.length < 2) {
+    showToast('يلزم لاعبان على الأقل');
+    return;
+  }
+  if (players.some(player => !player.team)) {
+    showToast('يجب أن يختار جميع اللاعبين فرقهم أولًا');
+    return;
+  }
+  await getLettersRoomRef().update({
+    status: 'game',
+    'letters/showQuestionInLive': false,
+    'letters/currentCellId': '',
+    'letters/currentQuestion': null,
+    'letters/winnerTeam': '',
+    'letters/winnerAt': null
+  });
+  state.page = 'game';
+}
+
 // ====== COLOR PICK ======
 function renderColorPick() {
+  if (isLettersMode()) {
+    renderLettersColorPick();
+    return;
+  }
   const room = state.room;
   if (!room) return;
   if (room.status === 'colorPick' && state.page !== 'colorPick') state.page = 'colorPick';
@@ -1439,6 +1821,65 @@ function renderColorPick() {
         ${state.isHost && allPicked ? `
           <button onclick="goCatPick()" class="w-full py-3 bg-indigo-500 hover:bg-indigo-600 text-white rounded-xl font-bold text-lg transition">التالي ←</button>
         ` : ''}
+      </div>
+    </div>`;
+}
+
+function renderLettersColorPick() {
+  const room = state.room;
+  if (!room) return;
+  if (room.status !== 'colorPick') { state.page = room.status; renderCurrentPage(); return; }
+  const manager = getLettersManager(room);
+  const players = getLettersPlayers(room);
+  const myPlayer = players.find(player => player.id === state.playerId);
+  const myTeam = myPlayer?.team || '';
+  const allPicked = players.length >= 2 && players.every(player => !!player.team);
+  const app = getApp();
+  app.innerHTML = `
+    <div class="h-full w-full flex items-center justify-center p-4">
+      <div class="fade-in text-center max-w-2xl w-full">
+        <h2 class="text-3xl font-black text-emerald-700 mb-2">اختيار الفريق</h2>
+        <p class="text-slate-400 mb-4">اللاعبون يختارون بين الأخضر والأحمر، والمدير يدير اللعبة فقط.</p>
+        <div class="mb-4 p-4 rounded-2xl bg-white shadow text-right">
+          <p class="text-sm font-black text-amber-600">مدير الغرفة</p>
+          <p class="font-bold text-slate-800 mt-1">${manager?.emoji || '🎛️'} ${manager?.name || '—'}</p>
+          ${manager ? renderPresenceBadge(manager.id, false) : ''}
+        </div>
+        <div class="grid gap-3 md:grid-cols-2 mb-4">
+          ${LETTERS_TEAMS.map(team => {
+            const members = getLettersTeamMembers(team.id, room);
+            const teamFull = members.length >= LETTERS_TEAM_LIMIT && myTeam !== team.id;
+            const selected = myTeam === team.id;
+            return `
+              <button onclick="${state.isHost || !myPlayer || teamFull ? '' : `pickLettersTeam('${team.id}')`}" ${state.isHost || !myPlayer || teamFull ? 'disabled' : ''}
+                class="rounded-3xl p-5 text-right border-2 transition ${selected ? 'scale-[1.01]' : ''} ${teamFull ? 'opacity-50 cursor-not-allowed' : 'hover:-translate-y-0.5'}"
+                style="background:${team.soft};border-color:${selected ? team.hex : team.hex + '55'}">
+                <p class="text-xl font-black mb-1" style="color:${team.hex}">${team.name}</p>
+                <p class="text-sm text-slate-500 mb-3">${members.length}/${LETTERS_TEAM_LIMIT} لاعبين</p>
+                <div class="space-y-1 text-sm font-bold text-slate-700">
+                  ${members.length ? members.map(player => `<p>${player.emoji} ${player.name}</p>`).join('') : '<p class="text-slate-400">لا يوجد أحد بعد</p>'}
+                </div>
+              </button>`;
+          }).join('')}
+        </div>
+        <div class="bg-white rounded-2xl shadow-lg p-5 mb-4">
+          <p class="text-sm text-slate-500 mb-3">اللاعبون (${players.length}/${LETTERS_PLAYER_LIMIT})</p>
+          <div class="flex justify-center gap-5 flex-wrap">
+            ${players.map(player => `
+              <div class="text-center">
+                <div class="text-4xl mb-1">${player.emoji}</div>
+                <p class="text-sm font-bold ${player.id === state.playerId ? 'text-emerald-600' : 'text-slate-700'}">${player.name}</p>
+                ${player.team ? `<p class="text-xs font-black mt-1" style="color:${getLettersTeamMeta(player.team).hex}">${getLettersTeamMeta(player.team).name}</p>` : '<p class="text-xs text-slate-400">لم يختر بعد</p>'}
+                ${renderPresenceBadge(player.id)}
+              </div>
+            `).join('')}
+          </div>
+        </div>
+        ${state.isHost ? `
+          <button onclick="startLettersGame()" class="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-black text-lg transition ${allPicked ? '' : 'opacity-50 cursor-not-allowed'}" ${allPicked ? '' : 'disabled'}>بدء اللعبة</button>
+        ` : `
+          <p class="text-sm font-bold text-slate-500">بانتظار منشئ الغرفة لبدء اللعبة بعد اكتمال اختيار الفرق</p>
+        `}
       </div>
     </div>`;
 }
@@ -1519,6 +1960,10 @@ async function startGame() {
 
 // ====== GAME BOARD ======
 function renderGame() {
+  if (isLettersMode()) {
+    renderLettersGame();
+    return;
+  }
   const room = state.room;
   if (!room) return;
   if (room.status === 'question') { state.page = 'question'; renderQuestion(); return; }
@@ -1957,14 +2402,18 @@ function renderInlineChatPanel() {
           </div>
         `).join('')}
       </div>
-      <form onsubmit="sendChat(event)" class="p-3 border-t border-slate-100 flex gap-2">
-        <input id="chatInput" type="text" placeholder="اكتب رسالة..." class="flex-1 px-3 py-2 border rounded-lg outline-none focus:border-indigo-400" maxlength="200">
+      <form onsubmit="sendChat(event, 'chatInput')" class="p-3 border-t border-slate-100 flex gap-2">
+        <input id="chatInput" value="${escapeHtml(state.chatDraft)}" oninput="rememberChatDraft(this.value)" type="text" placeholder="اكتب رسالة..." class="flex-1 px-3 py-2 border rounded-lg outline-none focus:border-indigo-400" maxlength="200">
         <button type="submit" class="px-4 py-2 bg-indigo-500 text-white rounded-lg font-bold hover:bg-indigo-600 transition">إرسال</button>
       </form>
     </div>`;
 }
 
 function renderWinner() {
+  if (isLettersMode()) {
+    renderLettersWinner();
+    return;
+  }
   const room = state.room;
   if (!room) return;
   if (room.status !== 'winner') {
@@ -2018,6 +2467,10 @@ function renderWinner() {
 }
 
 async function newGame() {
+  if (isLettersMode()) {
+    await restartLettersRoom();
+    return;
+  }
   const room = state.room;
   if (!room || !state.isHost) return;
   clearQuestionTimers();
@@ -2079,27 +2532,28 @@ function renderChatModal() {
             </div>
           `).join('')}
         </div>
-        <form onsubmit="sendChat(event)" class="p-3 border-t flex gap-2">
-          <input id="chatInput" type="text" placeholder="اكتب رسالة..." class="flex-1 px-3 py-2 border rounded-lg outline-none focus:border-indigo-400" maxlength="200">
+        <form onsubmit="sendChat(event, 'chatInput')" class="p-3 border-t flex gap-2">
+          <input id="chatInput" value="${escapeHtml(state.chatDraft)}" oninput="rememberChatDraft(this.value)" type="text" placeholder="اكتب رسالة..." class="flex-1 px-3 py-2 border rounded-lg outline-none focus:border-indigo-400" maxlength="200">
           <button type="submit" class="px-4 py-2 bg-indigo-500 text-white rounded-lg font-bold hover:bg-indigo-600 transition">إرسال</button>
         </form>
       </div>
     </div>`;
 }
 
-async function sendChat(e) {
+async function sendChat(e, inputId = 'chatInput') {
   e.preventDefault();
-  const input = document.getElementById('chatInput');
+  const input = document.getElementById(inputId);
   const text = input.value.trim();
   if (!text) return;
-  await db.ref(`rooms/${state.roomId}/chat`).push({
+  await getGameRoomRef().child('chat').push({
     senderId: state.playerId,
     senderName: state.playerName,
     text,
     time: Date.now()
   });
+  state.chatDraft = '';
   input.value = '';
-  scrollMessagesToBottom(state.page === 'winner' ? 'winnerChatMessages' : 'chatMessages');
+  scrollMessagesToBottom(isLettersMode() && state.page === 'game' ? 'lettersGameChatMessages' : state.page === 'winner' ? 'winnerChatMessages' : 'chatMessages');
 }
 
 // ====== ADMIN ======
