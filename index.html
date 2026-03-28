@@ -1433,8 +1433,7 @@ function renderLettersLobby() {
           </div>
         </div>
         ${state.isHost ? `
-          <div class="flex flex-col md:flex-row gap-3 justify-center">
-            <a href="${managerLink}" target="_blank" rel="noopener noreferrer" class="px-6 py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-black transition">فتح لوحة المدير</a>
+          <div class="flex justify-center">
             <button onclick="goColorPick()" class="px-6 py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-black transition ${players.length < 2 ? 'opacity-50 cursor-not-allowed' : ''}" ${players.length < 2 ? 'disabled' : ''}>بدء اللعبة</button>
           </div>
           ${players.length < 2 ? '<p class="mt-3 text-sm text-slate-400">يلزم لاعبان على الأقل قبل البدء.</p>' : ''}
