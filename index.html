@@ -1,0 +1,3091 @@
+<!doctype html>
+<html lang="ar" dir="rtl" class="h-full">
+ <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta property="og:title" content="ميادين - باقة ألعاب جماعية">
+  <meta property="og:description" content="اختر لعبتك الجماعية المفضلة بين ميدان الأسئلة وميدان الحروف، وابدأ غرفة وتحدَّ أصدقاءك مباشرة.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="https://sli0tin.github.io/Game/preview-card.png?v=20260324-1">
+  <meta property="og:image:url" content="https://sli0tin.github.io/Game/preview-card.png?v=20260324-1">
+  <meta property="og:image:secure_url" content="https://sli0tin.github.io/Game/preview-card.png?v=20260324-1">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:url" content="https://sli0tin.github.io/Game/">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="ميادين - باقة ألعاب جماعية">
+  <meta name="twitter:description" content="اختر لعبتك الجماعية المفضلة بين ميدان الأسئلة وميدان الحروف، وابدأ غرفة وتحدَّ أصدقاءك مباشرة.">
+  <meta name="twitter:image" content="https://sli0tin.github.io/Game/preview-card.png?v=20260324-1">
+  <meta name="theme-color" content="#1e3a8a">
+  <title>ميادين</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='0.9em' font-size='52'%3E%F0%9F%8F%86%3C/text%3E%3C/svg%3E">
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lucide@0.263.0/dist/umd/lucide.min.js"></script>
+  <script src="/_sdk/element_sdk.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&amp;display=swap" rel="stylesheet">
+  <script>
+tailwind.config = {
+  theme: {
+    extend: {
+      fontFamily: { taj: ['Tajawal', 'sans-serif'] }
+    }
+  }
+}
+</script>
+  <style>
+* { font-family: 'Tajawal', sans-serif; }
+html, body { height: 100%; margin: 0; }
+.fade-in { animation: fadeIn 0.4s ease; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes pulse-glow { 0%, 100% { box-shadow: 0 0 20px rgba(99,102,241,0.3); } 50% { box-shadow: 0 0 40px rgba(99,102,241,0.6); } }
+@keyframes confetti-fall { 0% { transform: translateY(-100%) rotate(0deg); opacity: 1; } 100% { transform: translateY(100vh) rotate(720deg); opacity: 0; } }
+.confetti-piece { position: fixed; top: -10px; animation: confetti-fall 3s ease-in forwards; z-index: 100; }
+@keyframes bounce-in { 0% { transform: scale(0.3); opacity: 0; } 50% { transform: scale(1.05); } 70% { transform: scale(0.95); } 100% { transform: scale(1); opacity: 1; } }
+.bounce-in { animation: bounce-in 0.6s ease; }
+.card-hover { transition: all 0.2s; }
+.card-hover:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.1); }
+.chat-badge { position: absolute; top: -6px; right: -6px; background: #ef4444; color: white; border-radius: 50%; width: 20px; height: 20px; font-size: 11px; display: flex; align-items: center; justify-content: center; }
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+</style>
+  <style>body { box-sizing: border-box; }</style>
+ </head>
+ <body class="h-full bg-gradient-to-br from-indigo-50 via-white to-purple-50">
+  <div id="app" class="h-full w-full overflow-auto"></div>
+  <script>
+// Firebase Init
+const firebaseConfig = {
+  apiKey: "AIzaSyBpcJHADMt7FWqGo-PRae2oa_916qD6KAI",
+  authDomain: "ques-87f74.firebaseapp.com",
+  databaseURL: "https://ques-87f74-default-rtdb.firebaseio.com",
+  projectId: "ques-87f74",
+  storageBucket: "ques-87f74.firebasestorage.app",
+  messagingSenderId: "110924910325",
+  appId: "1:110924910325:web:e92f80606985124c77ffbc",
+  measurementId: "G-B7MMDCHE3V"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+const ROOM_SESSION_KEY = 'almaidan-room-session-v1';
+
+// State
+let state = {
+  page: 'home',
+  gameMode: '',
+  lettersPanel: '',
+  playerName: '',
+  playerId: '',
+  roomId: '',
+  isHost: false,
+  room: null,
+  categories: [],
+  questions: [],
+  selectedCategories: [],
+  currentQuestion: null,
+  timer: null,
+  timerValue: 40,
+  chatOpen: false,
+  chatMessages: [],
+  unreadCount: 0,
+  adminFilter: '',
+  adminSearch: '',
+  listeners: [],
+  hostPanelOpen: false,
+  answerEvalTimeout: null,
+  stageTimeout: null,
+  connectedRef: null,
+  connectedCb: null,
+  evaluatingQuestionKey: '',
+  serverTimeOffset: 0,
+  chatDraft: '',
+  lettersWinnerPickerOpen: false,
+  lettersTransientTimeout: null
+};
+
+const COLORS = [
+  { name: 'أحمر', hex: '#ef4444', emoji: '🔴' },
+  { name: 'أزرق', hex: '#3b82f6', emoji: '🔵' },
+  { name: 'أخضر', hex: '#22c55e', emoji: '🟢' },
+  { name: 'برتقالي', hex: '#f97316', emoji: '🟠' },
+  { name: 'بنفسجي', hex: '#a855f7', emoji: '🟣' },
+  { name: 'أصفر', hex: '#eab308', emoji: '🟡' },
+];
+
+const PLAYER_EMOJIS = ['😎', '🤩', '😏', '🧐'];
+const LETTERS_ALPHABET = ['أ', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'ه', 'و', 'ي'];
+const LETTERS_BOARD_SIZE = 25;
+const REQUIRED_BOARD_LETTER = 'أ';
+const LETTERS_PLAYER_LIMIT = 4;
+const LETTERS_TEAM_LIMIT = 2;
+const LETTERS_LIVE_RESULT_DURATION = 2600;
+const LETTERS_SHARE_VERSION = '20260328-2';
+const LETTERS_TEAMS = [
+  { id: 'green', name: 'الفريق الأخضر', hex: '#16a34a', soft: '#dcfce7' },
+  { id: 'red', name: 'الفريق الأحمر', hex: '#ef4444', soft: '#fee2e2' }
+];
+
+let clickTimes = [];
+let defaultConfig = { game_title: 'الميدان' };
+let config = { ...defaultConfig };
+
+// Element SDK
+if (window.elementSdk) {
+  window.elementSdk.init({
+    defaultConfig,
+    onConfigChange: async (c) => {
+      config = c;
+    },
+    mapToCapabilities: (c) => ({
+      recolorables: [],
+      borderables: [],
+      fontEditable: undefined,
+      fontSizeable: undefined
+    }),
+    mapToEditPanelValues: (c) => new Map([['game_title', c.game_title || defaultConfig.game_title]])
+  });
+}
+
+// Utility
+function genId() { return Math.random().toString(36).substr(2, 6).toUpperCase(); }
+function getApp() { return document.getElementById('app'); }
+function isQuizMode() { return state.gameMode === 'quiz'; }
+function isLettersMode() { return state.gameMode === 'letters'; }
+
+function normalizeLettersLetter(letter = '') {
+  const value = (letter || '').toString().trim();
+  if (!value) return '';
+  const char = value.charAt(0);
+  if (['ا', 'أ', 'إ', 'آ'].includes(char)) return REQUIRED_BOARD_LETTER;
+  return char;
+}
+
+function shuffleArray(items = []) {
+  const arr = [...items];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function getAvailableLettersForBoard() {
+  const seen = new Set(
+    state.questions
+      .map(q => normalizeLettersLetter(q.letter))
+      .filter(letter => LETTERS_ALPHABET.includes(letter))
+  );
+  return LETTERS_ALPHABET.filter(letter => seen.has(letter));
+}
+
+function getLettersQuestionsForLetter(letter) {
+  const normalized = normalizeLettersLetter(letter);
+  return state.questions.filter(q => normalizeLettersLetter(q.letter) === normalized);
+}
+function escapeHtml(value = '') {
+  return (value || '').toString()
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+function getLettersTeamMeta(team) {
+  return LETTERS_TEAMS.find(item => item.id === team) || LETTERS_TEAMS[0];
+}
+function getLettersManager(room = state.room) {
+  const players = room?.players ? Object.values(room.players) : [];
+  return players.find(player => player.role === 'manager' || player.id === room?.host) || null;
+}
+function getLettersPlayers(room = state.room) {
+  const players = room?.players ? Object.values(room.players) : [];
+  return players.filter(player => (player.role || 'player') !== 'manager');
+}
+function getLettersTeamMembers(team, room = state.room) {
+  return getLettersPlayers(room).filter(player => player.team === team);
+}
+function getLettersChatAppearance(senderId, room = state.room) {
+  const senderRef = typeof senderId === 'string' ? { senderId } : (senderId || {});
+  const sender = room?.players?.[senderRef.senderId];
+  const role = sender?.role || senderRef.senderRole || 'player';
+  const team = sender?.team || senderRef.senderTeam || '';
+  if (role === 'manager') {
+    return { accent: '#d97706', soft: '#fff7ed', text: '#9a3412', border: '#fbbf24' };
+  }
+  if (team) {
+    const teamMeta = getLettersTeamMeta(team);
+    return { accent: teamMeta.hex, soft: teamMeta.soft, text: teamMeta.hex, border: teamMeta.hex };
+  }
+  return { accent: '#475569', soft: '#f8fafc', text: '#334155', border: '#cbd5e1' };
+}
+function getLettersRenderSignature(room = state.room) {
+  return JSON.stringify({
+    id: room?.id || '',
+    status: room?.status || '',
+    host: room?.host || '',
+    players: room?.players || {},
+    presence: room?.presence || {},
+    letters: room?.letters || {}
+  });
+}
+function getLettersPlayerCount(room = state.room) {
+  return getLettersPlayers(room).length;
+}
+function rememberChatDraft(value) {
+  state.chatDraft = value;
+}
+function getActiveChatInputId() {
+  const active = document.activeElement;
+  return active?.id || '';
+}
+function restoreChatInputFocus(inputId = '') {
+  if (!inputId) return;
+  setTimeout(() => {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    input.focus();
+    const length = input.value.length;
+    if (typeof input.setSelectionRange === 'function') input.setSelectionRange(length, length);
+  }, 0);
+}
+function clearLettersTransientTimeout() {
+  clearTimeout(state.lettersTransientTimeout);
+  state.lettersTransientTimeout = null;
+}
+function getLettersActiveLiveResult(room = state.room) {
+  const result = room?.letters?.liveResult;
+  if (!result?.shownAt) return null;
+  const elapsed = estimatedServerNow() - Number(result.shownAt || 0);
+  if (elapsed >= LETTERS_LIVE_RESULT_DURATION) return null;
+  return result;
+}
+function syncLettersTransientTimeout(room = state.room) {
+  clearLettersTransientTimeout();
+  const result = getLettersActiveLiveResult(room);
+  if (!result) return;
+  const remaining = LETTERS_LIVE_RESULT_DURATION - (estimatedServerNow() - Number(result.shownAt || 0));
+  state.lettersTransientTimeout = setTimeout(() => {
+    state.lettersTransientTimeout = null;
+    renderCurrentPage();
+  }, Math.max(60, remaining + 60));
+}
+function renderLettersChatMessagesMarkup(msgs = state.chatMessages, room = state.room) {
+  if (!msgs.length) return '<p class="text-slate-400 text-sm text-center py-8">ابدأوا الدردشة أثناء اللعب</p>';
+  return msgs.map(msg => {
+    const appearance = getLettersChatAppearance(msg, room);
+    return `
+      <div class="text-sm ${msg.senderId === state.playerId ? 'text-left' : 'text-right'}">
+        <span class="font-black" style="color:${appearance.accent}">${escapeHtml(msg.senderName)}</span>
+        <p class="inline-block px-3 py-2 rounded-2xl mt-1 border-2" style="background:${appearance.soft};color:${appearance.text};border-color:${appearance.border}">${escapeHtml(msg.text)}</p>
+      </div>`;
+  }).join('');
+}
+function updateLettersGameChatInPlace() {
+  const messagesEl = document.getElementById('lettersGameChatMessages');
+  if (!messagesEl) return false;
+  messagesEl.innerHTML = renderLettersChatMessagesMarkup(state.chatMessages, state.room);
+  const countEl = document.getElementById('lettersGameChatCount');
+  if (countEl) countEl.textContent = `${state.chatMessages.length} رسالة`;
+  scrollMessagesToBottom('lettersGameChatMessages');
+  return true;
+}
+function renderLettersTeamChips(room = state.room, compact = false) {
+  return LETTERS_TEAMS.map(team => {
+    const members = getLettersTeamMembers(team.id, room);
+    return `
+      <div class="rounded-2xl px-3 py-2 ${compact ? '' : 'min-w-[150px]'}" style="background:${team.soft};border:2px solid ${team.hex}">
+        <p class="font-black text-sm" style="color:${team.hex}">${team.name}</p>
+        <p class="text-xs text-slate-500 mt-1">${members.length ? members.map(player => player.name).join(' • ') : 'لا يوجد لاعبون بعد'}</p>
+      </div>`;
+  }).join('');
+}
+function getQuestionRoundKey(q) {
+  if (!q) return '';
+  return [q.id || '', q.cat || '', q.pts || q.points || '', q.startTime || 'pending'].join('::');
+}
+function getAnswerChoice(answerEntry) {
+  if (typeof answerEntry === 'string') return answerEntry;
+  return answerEntry?.choice || '';
+}
+function estimatedServerNow() {
+  return Date.now() + Number(state.serverTimeOffset || 0);
+}
+function clearQuestionTimers() {
+  clearInterval(state.timer);
+  clearTimeout(state.answerEvalTimeout);
+  state.timer = null;
+  state.answerEvalTimeout = null;
+}
+function clearStageTimeout() {
+  clearTimeout(state.stageTimeout);
+  state.stageTimeout = null;
+}
+function getRoutePagePath(game = state.gameMode) {
+  const path = window.location.pathname;
+  const baseDir = /\.[a-z0-9]+$/i.test(path)
+    ? path.replace(/[^/]+$/, '')
+    : (path.endsWith('/') ? path : `${path}/`);
+  return `${baseDir}${game === 'letters' ? 'letters.html' : 'index.html'}`;
+}
+function buildRouteUrl({ game = state.gameMode, room = '', panel = '', token = '' } = {}) {
+  const linkUrl = new URL(window.location.href);
+  linkUrl.pathname = getRoutePagePath(game);
+  linkUrl.search = '';
+  linkUrl.hash = '';
+  if (game) linkUrl.searchParams.set('game', game);
+  if (room) linkUrl.searchParams.set('room', room);
+  if (panel) linkUrl.searchParams.set('panel', panel);
+  if (token) linkUrl.searchParams.set('token', token);
+  if (game === 'letters') linkUrl.searchParams.set('pv', LETTERS_SHARE_VERSION);
+  return linkUrl.toString();
+}
+function buildShareLink(roomId = state.roomId, extra = {}) {
+  return buildRouteUrl({ room: roomId, ...extra });
+}
+function buildModeLink(game) {
+  return buildRouteUrl({ game });
+}
+function getLettersRoomRef(roomId = state.roomId) {
+  return db.ref('letterRooms/' + roomId);
+}
+function getGameRoomRef(roomId = state.roomId, roomLike = state.room) {
+  const isLettersRoom = roomLike?.game === 'letters' || (isLettersMode() && !roomLike?.game);
+  return db.ref(`${isLettersRoom ? 'letterRooms' : 'rooms'}/${roomId}`);
+}
+function getPresenceRef(roomId = state.roomId, playerId = state.playerId) {
+  const base = isLettersMode() ? 'letterRooms' : 'rooms';
+  return db.ref(`${base}/${roomId}/presence/${playerId}`);
+}
+function setRoomUrl(roomId = state.roomId) {
+  if (!roomId) return;
+  window.history.replaceState({}, '', buildShareLink(roomId));
+}
+function loadRoomSession() {
+  try {
+    return JSON.parse(localStorage.getItem(ROOM_SESSION_KEY) || 'null');
+  } catch (_) {
+    return null;
+  }
+}
+function persistRoomSession() {
+  if (!state.roomId || !state.playerId) {
+    clearRoomSession();
+    return;
+  }
+  try {
+    localStorage.setItem(ROOM_SESSION_KEY, JSON.stringify({
+      roomId: state.roomId,
+      playerId: state.playerId,
+      playerName: state.playerName || '',
+      isHost: !!state.isHost,
+      gameMode: state.gameMode || 'quiz'
+    }));
+  } catch (_) {}
+}
+function clearRoomSession() {
+  try {
+    localStorage.removeItem(ROOM_SESSION_KEY);
+  } catch (_) {}
+}
+function stopPresenceTracking(markOffline = true) {
+  if (state.connectedRef && state.connectedCb) {
+    state.connectedRef.off('value', state.connectedCb);
+  }
+  if (state.roomId && state.playerId) {
+    const presenceRef = getPresenceRef();
+    presenceRef.onDisconnect().cancel().catch(() => {});
+    if (markOffline) {
+      presenceRef.update({
+        online: false,
+        name: state.playerName || '',
+        lastSeen: firebase.database.ServerValue.TIMESTAMP
+      }).catch(() => {});
+    }
+  }
+  state.connectedRef = null;
+  state.connectedCb = null;
+}
+function startPresenceTracking() {
+  stopPresenceTracking(false);
+  if (!state.roomId || !state.playerId) return;
+  const presenceRef = getPresenceRef();
+  const connectedRef = firebase.database().ref('.info/connected');
+  const cb = (snap) => {
+    if (snap.val() !== true) return;
+    presenceRef.onDisconnect().update({
+      online: false,
+      name: state.playerName || '',
+      lastSeen: firebase.database.ServerValue.TIMESTAMP
+    }).catch(() => {});
+    presenceRef.update({
+      online: true,
+      name: state.playerName || '',
+      lastSeen: firebase.database.ServerValue.TIMESTAMP
+    }).catch(() => {});
+  };
+  connectedRef.on('value', cb);
+  state.connectedRef = connectedRef;
+  state.connectedCb = cb;
+}
+function resetRoomState({ markOffline = false, clearSession = true } = {}) {
+  clearQuestionTimers();
+  clearStageTimeout();
+  clearLettersTransientTimeout();
+  cleanupListeners();
+  stopPresenceTracking(markOffline);
+  if (clearSession) clearRoomSession();
+  state = {
+    ...state,
+    page: 'home',
+    lettersPanel: '',
+    playerId: '',
+    roomId: '',
+    isHost: false,
+    room: null,
+    chatOpen: false,
+    chatMessages: [],
+    chatDraft: '',
+    unreadCount: 0,
+    hostPanelOpen: false,
+    evaluatingQuestionKey: '',
+    lettersWinnerPickerOpen: false,
+    lettersTransientTimeout: null
+  };
+  window.history.replaceState({}, '', state.gameMode ? buildModeLink(state.gameMode) : window.location.pathname);
+  renderCurrentPage();
+}
+function formatPresenceStatus(playerId) {
+  const presence = state.room?.presence?.[playerId];
+  if (presence?.online) return 'متصل الآن';
+  if (!presence?.lastSeen) return 'غير متصل';
+  const diffMins = Math.max(1, Math.floor((Date.now() - presence.lastSeen) / 60000));
+  if (diffMins < 60) return `آخر ظهور قبل ${diffMins} د`;
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) return `آخر ظهور قبل ${diffHours} س`;
+  const diffDays = Math.floor(diffHours / 24);
+  return `آخر ظهور قبل ${diffDays} ي`;
+}
+function isPlayerOnline(playerId) {
+  return !!state.room?.presence?.[playerId]?.online;
+}
+function renderPresenceBadge(playerId, centered = true) {
+  const online = isPlayerOnline(playerId);
+  return `
+    <div class="flex items-center gap-1 mt-1 ${centered ? 'justify-center' : ''}">
+      <span class="w-2 h-2 rounded-full ${online ? 'bg-emerald-500' : 'bg-slate-300'}"></span>
+      <span class="text-[10px] font-bold ${online ? 'text-emerald-600' : 'text-slate-400'}">${online ? 'متصل الآن' : 'غير متصل'}</span>
+    </div>`;
+}
+function getContrastTextColor(hex) {
+  if (!hex || !hex.startsWith('#') || hex.length !== 7) return '#ffffff';
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const luminance = (0.299 * r) + (0.587 * g) + (0.114 * b);
+  return luminance > 170 ? '#111827' : '#ffffff';
+}
+function scrollMessagesToBottom(id = 'chatMessages') {
+  const scroll = () => {
+    const el = document.getElementById(id);
+    if (el) el.scrollTop = el.scrollHeight;
+  };
+  setTimeout(() => {
+    scroll();
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(scroll);
+    }
+  }, 0);
+}
+function toggleHostPanel(forceState) {
+  state.hostPanelOpen = typeof forceState === 'boolean' ? forceState : !state.hostPanelOpen;
+  syncHostOverlay();
+}
+function renderExitOverlay() {
+  return `
+    <div class="fixed top-3 left-3 z-[1100]">
+      <button onclick="exitRoom()" class="h-10 rounded-full bg-white/95 text-slate-800 px-4 shadow-xl border border-slate-200 backdrop-blur flex items-center justify-center gap-2 text-sm font-black hover:bg-white transition">
+        <span>⟵</span>
+        <span>خروج</span>
+      </button>
+    </div>`;
+}
+function syncExitOverlay() {
+  const existing = document.getElementById('exitOverlay');
+  const canShow = !!(state.room && state.page !== 'home' && state.page !== 'admin' && state.page !== 'lettersManager' && state.page !== 'lettersLive');
+  if (!canShow) {
+    existing?.remove();
+    return;
+  }
+  const exitOverlay = existing || document.createElement('div');
+  exitOverlay.id = 'exitOverlay';
+  exitOverlay.innerHTML = renderExitOverlay();
+  if (!existing) document.body.appendChild(exitOverlay);
+}
+function renderHostOverlay() {
+  const players = state.room?.players ? Object.values(state.room.players) : [];
+  const onlineCount = players.filter(p => state.room?.presence?.[p.id]?.online).length;
+  return `
+    <div class="fixed top-3 right-3 z-[1100]">
+      <button onclick="toggleHostPanel()" class="h-10 min-w-[42px] rounded-full bg-slate-900/90 text-white px-3 shadow-xl backdrop-blur flex items-center justify-center gap-1 text-sm font-black hover:bg-slate-800 transition">
+        <span>👥</span>
+        <span class="text-[11px]">${players.length}</span>
+      </button>
+      ${state.hostPanelOpen ? `
+        <div class="fixed inset-0 bg-slate-950/20" onclick="toggleHostPanel(false)"></div>
+        <div class="absolute top-12 right-0 w-80 max-w-[calc(100vw-1.5rem)] rounded-2xl bg-white/95 backdrop-blur shadow-2xl border border-slate-200 overflow-hidden">
+          <div class="px-4 py-3 bg-slate-900 text-white">
+            <p class="text-sm font-black">إدارة الغرفة</p>
+            <p class="text-[11px] text-slate-300">${onlineCount}/${players.length} متصل الآن</p>
+          </div>
+          <div class="p-2 max-h-[70vh] overflow-auto space-y-1">
+            ${state.room?.game === 'letters' ? `
+              <div class="px-2 pt-2 pb-1">
+                <a href="${getLettersManagerLink(state.room)}" target="_blank" rel="noopener noreferrer" class="flex items-center justify-center gap-2 w-full rounded-xl bg-amber-500 text-white py-2.5 text-sm font-black hover:bg-amber-600 transition">
+                  <span>🎛️</span>
+                  <span>فتح لوحة المدير</span>
+                </a>
+              </div>
+            ` : ''}
+            <p class="px-2 pt-1 pb-2 text-[11px] text-slate-400">اضغط على اسم اللاعب لطرده من الغرفة.</p>
+            ${players.map(p => {
+              const isHostPlayer = p.id === state.room.host;
+              const isOnline = !!state.room?.presence?.[p.id]?.online;
+              return `
+                <button onclick="${isHostPlayer ? '' : `kickPlayer('${p.id}')`}" ${isHostPlayer ? 'disabled' : ''}
+                  class="w-full flex items-center gap-3 rounded-xl px-3 py-3 text-right transition ${isHostPlayer ? 'bg-amber-50 cursor-default' : 'hover:bg-rose-50 cursor-pointer'}">
+                  <span class="w-2.5 h-2.5 rounded-full ${isOnline ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.6)]' : 'bg-slate-300'}"></span>
+                  <div class="flex-1">
+                    <p class="font-black text-slate-800">${p.name} ${isHostPlayer ? '👑' : ''}</p>
+                    <p class="text-xs ${isOnline ? 'text-emerald-600' : 'text-slate-400'}">${formatPresenceStatus(p.id)}</p>
+                  </div>
+                  <span class="text-xs font-bold ${isHostPlayer ? 'text-amber-500' : 'text-rose-500'}">${isHostPlayer ? 'المضيف' : 'طرد'}</span>
+                </button>`;
+            }).join('')}
+          </div>
+        </div>
+      ` : ''}
+    </div>`;
+}
+function syncHostOverlay() {
+  const existing = document.getElementById('hostOverlay');
+  const canShow = state.isHost && state.room && state.page !== 'home' && state.page !== 'admin' && state.page !== 'lettersManager' && state.page !== 'lettersLive';
+  if (!canShow) {
+    existing?.remove();
+    return;
+  }
+  const hostOverlay = existing || document.createElement('div');
+  hostOverlay.id = 'hostOverlay';
+  hostOverlay.innerHTML = renderHostOverlay();
+  if (!existing) document.body.appendChild(hostOverlay);
+}
+function scheduleQuestionReveal(expectedQuestionKey, delayMs) {
+  clearStageTimeout();
+  state.stageTimeout = setTimeout(async () => {
+    await db.ref(`rooms/${state.roomId}`).transaction(room => {
+      if (!room || room.status !== 'loading' || !room.currentQ) return room;
+      if (getQuestionRoundKey(room.currentQ) !== expectedQuestionKey) return room;
+      room.status = 'question';
+      room.currentQ.startTime = estimatedServerNow();
+      room.currentQ.answerCounter = 0;
+      room.currentQ.evaluatingAt = null;
+      room.answers = null;
+      room.answerTimes = null;
+      room.answerOrders = null;
+      return room;
+    });
+  }, Math.max(0, delayMs));
+}
+function scheduleAnswerAnalysis(expectedQuestionKey, delayMs) {
+  clearStageTimeout();
+  state.stageTimeout = setTimeout(async () => {
+    await finalizeAnswerAnalysis(expectedQuestionKey);
+  }, Math.max(0, delayMs));
+}
+async function removePlayerFromRoom(playerId, roomOverride = null) {
+  const roomId = roomOverride?.id || state.roomId;
+  if (!roomId || !playerId) return false;
+  const roomRef = getGameRoomRef(roomId, roomOverride || state.room);
+  const room = roomOverride?.players ? roomOverride : state.room || (await roomRef.once('value')).val();
+  if (!room?.players?.[playerId]) return false;
+
+  if (room.game === 'letters') {
+    if (playerId === room.host) {
+      await roomRef.remove();
+      return true;
+    }
+    await roomRef.update({
+      [`players/${playerId}`]: null,
+      [`presence/${playerId}`]: null
+    });
+    return true;
+  }
+
+  const remainingPlayers = Object.values(room.players).filter(p => p.id !== playerId);
+  if (remainingPlayers.length === 0) {
+    await roomRef.remove();
+    return true;
+  }
+
+  const updates = {
+    [`players/${playerId}`]: null,
+    [`presence/${playerId}`]: null,
+    [`answers/${playerId}`]: null,
+    [`answerTimes/${playerId}`]: null,
+    [`answerOrders/${playerId}`]: null
+  };
+
+  if (room.host === playerId) {
+    updates.host = remainingPlayers[0].id;
+  }
+
+  const turnOrder = Array.isArray(room.turnOrder) ? room.turnOrder : [];
+  if (turnOrder.length) {
+    const removedIdx = turnOrder.indexOf(playerId);
+    const nextTurnOrder = turnOrder.filter(id => id !== playerId);
+    updates.turnOrder = nextTurnOrder.length ? nextTurnOrder : null;
+    if (nextTurnOrder.length) {
+      let nextTurnIndex = room.turnIndex || 0;
+      if (removedIdx !== -1) {
+        if (removedIdx < nextTurnIndex) nextTurnIndex -= 1;
+        if (removedIdx === nextTurnIndex && nextTurnIndex >= nextTurnOrder.length) nextTurnIndex = 0;
+      }
+      updates.turnIndex = Math.max(0, nextTurnIndex % nextTurnOrder.length);
+    } else {
+      updates.turnIndex = 0;
+    }
+  }
+
+  if (room.status === 'question' && remainingPlayers.length > 1) {
+    const remainingAnswered = remainingPlayers.every(player => !!getAnswerChoice(room.answers?.[player.id]));
+    if (remainingAnswered) {
+      updates.status = 'evaluating';
+      updates['currentQ/evaluatingAt'] = estimatedServerNow();
+    }
+  }
+
+  if (remainingPlayers.length <= 1 && !['lobby', 'winner'].includes(room.status)) {
+    updates.status = 'winner';
+    updates.currentQ = null;
+    updates.answers = null;
+    updates.answerTimes = null;
+    updates.answerOrders = null;
+  }
+
+  await roomRef.update(updates);
+  return true;
+}
+async function kickPlayer(playerId) {
+  const room = state.room;
+  if (!state.isHost || !room?.players?.[playerId]) return;
+  if (playerId === room.host) {
+    showToast('لا يمكن طرد المضيف');
+    return;
+  }
+  const player = room.players[playerId];
+  if (!window.confirm(`هل تريد طرد ${player.name} من الغرفة؟`)) return;
+  await removePlayerFromRoom(playerId, room);
+  showToast(`تم طرد ${player.name}`);
+}
+async function exitRoom(skipConfirm = false) {
+  if (!state.roomId || !state.playerId) {
+    resetRoomState();
+    return;
+  }
+  if (!skipConfirm && !window.confirm('هل تريد الخروج من الغرفة؟')) return;
+  const playerId = state.playerId;
+  const roomSnapshot = state.room;
+  clearQuestionTimers();
+  clearStageTimeout();
+  cleanupListeners();
+  stopPresenceTracking(false);
+  clearRoomSession();
+  try {
+    await removePlayerFromRoom(playerId, roomSnapshot);
+  } catch (_) {}
+  resetRoomState({ markOffline: false, clearSession: false });
+}
+
+// Track rapid clicks for admin
+document.addEventListener('click', () => {
+  const now = Date.now();
+  clickTimes.push(now);
+  clickTimes = clickTimes.filter(t => now - t < 2000);
+  if (clickTimes.length >= 5 && state.page === 'home') {
+    document.getElementById('adminBtn')?.classList.remove('hidden');
+    clickTimes = [];
+  }
+});
+
+// Firebase helpers
+function listenRoom(roomId) {
+  cleanupListeners();
+  const ref = db.ref('rooms/' + roomId);
+  const cb = ref.on('value', snap => {
+    const data = snap.val();
+    if (!data) {
+      if (state.roomId) resetRoomState();
+      return;
+    }
+    if (state.playerId && data.players && !data.players[state.playerId]) {
+      resetRoomState();
+      showToast('تم إخراجك من الغرفة');
+      return;
+    }
+    state.room = data;
+    if (state.playerId) {
+      state.isHost = data.host === state.playerId;
+      state.playerName = data.players?.[state.playerId]?.name || state.playerName;
+      persistRoomSession();
+      setRoomUrl(data.id || state.roomId);
+    }
+    if (data.status !== 'question') {
+      clearQuestionTimers();
+      state.evaluatingQuestionKey = '';
+    }
+    if (!['result', 'noAnswer'].includes(data.status)) {
+      clearStageTimeout();
+    }
+    // Update chat
+    if (data.chat) {
+      const msgs = Object.values(data.chat);
+      const chatVisible = state.chatOpen || state.page === 'winner';
+      if (!chatVisible) {
+        const newCount = msgs.length - state.chatMessages.length;
+        if (newCount > 0) state.unreadCount += newCount;
+      } else {
+        state.unreadCount = 0;
+      }
+      state.chatMessages = msgs;
+    } else {
+      state.chatMessages = [];
+      state.unreadCount = 0;
+    }
+    renderCurrentPage();
+  });
+  state.listeners.push({ ref, cb });
+}
+
+function cleanupListeners() {
+  clearLettersTransientTimeout();
+  state.listeners.forEach(l => l.ref.off('value', l.cb));
+  state.listeners = [];
+}
+
+// Load questions from Firebase
+async function loadQuestionsFromFirebase() {
+  const lettersMode = isLettersMode();
+  const path = lettersMode ? 'letterQuestions' : 'questions';
+  const snap = await db.ref(path).once('value');
+  const data = snap.val();
+  if (!data) { state.questions = []; state.categories = []; return; }
+  state.questions = Object.entries(data).map(([id, q]) => lettersMode
+    ? { id, ...q, letter: normalizeLettersLetter(q.letter) }
+    : { id, ...q }
+  );
+  state.categories = lettersMode
+    ? LETTERS_ALPHABET.filter(letter => state.questions.some(q => q.letter === letter))
+    : [...new Set(state.questions.map(q => q.category))];
+}
+
+// Render router
+function renderCurrentPage() {
+  const activeChatInputId = getActiveChatInputId();
+  switch (state.page) {
+    case 'home': renderHome(); break;
+    case 'admin': renderAdmin(); break;
+    case 'lobby': renderLobby(); break;
+    case 'lettersManager': renderLettersManager(); break;
+    case 'lettersLive': renderLettersLive(); break;
+    case 'colorPick': renderColorPick(); break;
+    case 'catPick': renderCatPick(); break;
+    case 'game': renderGame(); break;
+    case 'question': renderQuestion(); break;
+    case 'loading': renderLoading(); break;
+    case 'evaluating': renderLoading(); break;
+    case 'result': renderResult(); break;
+    case 'noAnswer': renderNoAnswer(); break;
+    case 'winner': renderWinner(); break;
+  }
+  lucide.createIcons();
+  syncExitOverlay();
+  syncHostOverlay();
+  if (isLettersMode() && ['game', 'winner'].includes(state.page)) {
+    state.unreadCount = 0;
+    scrollMessagesToBottom('lettersGameChatMessages');
+  } else if (state.page === 'winner') {
+    state.unreadCount = 0;
+    scrollMessagesToBottom('winnerChatMessages');
+  } else if (state.chatOpen) {
+    state.unreadCount = 0;
+    scrollMessagesToBottom('chatMessages');
+  }
+  if (isLettersMode()) syncLettersTransientTimeout(state.room);
+  restoreChatInputFocus(activeChatInputId);
+}
+
+async function restoreRoomSession() {
+  const saved = loadRoomSession();
+  if (!saved?.roomId || !saved?.playerId) return false;
+
+  try {
+    state.gameMode = saved.gameMode || 'quiz';
+    const snap = (isLettersMode() ? await getLettersRoomRef(saved.roomId).once('value') : await db.ref('rooms/' + saved.roomId).once('value'));
+    const room = snap.val();
+    if (!room?.players?.[saved.playerId]) {
+      clearRoomSession();
+      return false;
+    }
+
+    state.roomId = saved.roomId;
+    state.playerId = saved.playerId;
+    state.playerName = room.players[saved.playerId]?.name || saved.playerName || '';
+    state.room = room;
+    state.isHost = room.host === saved.playerId;
+    state.lettersPanel = '';
+    state.hostPanelOpen = false;
+    state.page = room.status || 'lobby';
+    if (isLettersMode()) {
+      listenLettersRoom(state.roomId);
+    } else {
+      listenRoom(state.roomId);
+    }
+    startPresenceTracking();
+    persistRoomSession();
+    setRoomUrl(state.roomId);
+    renderCurrentPage();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Check URL for room
+function checkUrlForRoom() {
+  const params = new URLSearchParams(window.location.search);
+  const game = params.get('game') || '';
+  const roomId = params.get('room');
+  const panel = params.get('panel') || '';
+  const token = params.get('token') || '';
+  if (game) state.gameMode = game;
+  if (game === 'letters' && roomId && panel) {
+    bootstrapLettersPanel(roomId, panel, token);
+    return;
+  }
+  if (roomId) {
+    state.roomId = roomId;
+    state.page = 'home';
+    renderHome(true);
+    return;
+  }
+  if (game) {
+    state.page = 'home';
+    renderCurrentPage();
+    return;
+  }
+  renderCurrentPage();
+}
+
+// ====== HOME PAGE ======
+function selectGame(game) {
+  state.gameMode = game;
+  state.page = 'home';
+  window.history.replaceState({}, '', buildModeLink(game));
+  renderCurrentPage();
+}
+
+function goLanding() {
+  state.gameMode = '';
+  state.page = 'home';
+  const landingUrl = new URL(window.location.href);
+  landingUrl.pathname = getRoutePagePath('quiz');
+  landingUrl.search = '';
+  landingUrl.hash = '';
+  window.history.replaceState({}, '', landingUrl.toString());
+  renderCurrentPage();
+}
+
+function renderGamesLanding() {
+  const app = getApp();
+  app.innerHTML = `
+    <div class="min-h-full w-full px-4 py-8">
+      <div class="max-w-5xl mx-auto fade-in">
+        <div class="text-center mb-8">
+          <p class="text-sm font-black tracking-[0.35em] text-slate-400 mb-3">MIYADEEN</p>
+          <h1 class="text-5xl md:text-6xl font-black text-slate-900 mb-3">ميادين</h1>
+          <p class="text-slate-500 text-lg">بوابة ألعاب جماعية بنفس الروح التنافسية، مع أوضاع لعب مختلفة تحت ثيم واحد.</p>
+        </div>
+        <div class="grid gap-5 md:grid-cols-2">
+          <button onclick="selectGame('quiz')" class="text-right rounded-[2rem] overflow-hidden border border-slate-200 bg-white/90 shadow-xl hover:-translate-y-1 transition">
+            <div class="grid md:grid-cols-[180px_1fr] items-stretch">
+              <div class="bg-gradient-to-br from-indigo-600 via-indigo-500 to-sky-400 p-4 flex items-center justify-center">
+                <img src="preview-card.png" alt="ميدان الأسئلة" class="w-full max-w-[150px] rounded-2xl shadow-2xl object-cover aspect-[1/1]">
+              </div>
+              <div class="p-6">
+                <div class="flex items-center gap-3 mb-3">
+                  <span class="text-3xl">⚔️</span>
+                  <h2 class="text-3xl font-black text-slate-900">ميدان الأسئلة</h2>
+                </div>
+                <p class="text-slate-500 leading-8">لعبة الأسئلة الجماعية الحالية: غرف، لاعبين، ألوان، تصنيفات، لوحة نقاط، وأسئلة متتابعة مع أسرع إجابة.</p>
+              </div>
+            </div>
+          </button>
+          <button onclick="selectGame('letters')" class="text-right rounded-[2rem] overflow-hidden border border-slate-200 bg-white/90 shadow-xl hover:-translate-y-1 transition">
+            <div class="grid md:grid-cols-[180px_1fr] items-stretch">
+              <div class="bg-gradient-to-br from-emerald-600 via-emerald-500 to-lime-300 p-4 flex items-center justify-center">
+                <div class="relative w-[150px] h-[150px] rounded-[2rem] bg-white/20 backdrop-blur border border-white/30 shadow-2xl flex items-center justify-center">
+                  <div class="grid grid-cols-3 gap-2 rotate-6">
+                    ${['أ','ب','ت','ث','ج','ح','خ','د','ذ'].map(letter => `
+                      <div class="w-10 h-9 bg-[#fff9c4] text-slate-900 font-black text-xl flex items-center justify-center" style="clip-path:polygon(25% 6%,75% 6%,100% 50%,75% 94%,25% 94%,0 50%)">${letter}</div>
+                    `).join('')}
+                  </div>
+                </div>
+              </div>
+              <div class="p-6">
+                <div class="flex items-center gap-3 mb-3">
+                  <span class="text-3xl">🔤</span>
+                  <h2 class="text-3xl font-black text-slate-900">ميدان الحروف</h2>
+                </div>
+                <p class="text-slate-500 leading-8">لوحة خلية حروف مباشرة تُدار من رابط مدير خاص، مع بث حي منفصل للوحة فقط، وأسئلة تُسحب بحسب الحرف الذي يختاره المدير.</p>
+              </div>
+            </div>
+          </button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderHome(joinMode = false) {
+  if (!state.gameMode) {
+    renderGamesLanding();
+    return;
+  }
+  if (isLettersMode()) {
+    renderLettersHome(joinMode);
+    return;
+  }
+  const app = getApp();
+  app.innerHTML = `
+    <div class="h-full w-full flex items-center justify-center p-4">
+      <div class="fade-in text-center max-w-md w-full">
+        <button onclick="goLanding()" class="mb-5 px-4 py-2 bg-white/80 border border-slate-200 rounded-full text-sm font-black text-slate-600 hover:bg-white transition">↩ العودة إلى ميادين</button>
+        <div class="text-7xl mb-4">⚔️</div>
+        <h1 class="text-5xl font-black text-indigo-700 mb-2">ميدان الأسئلة</h1>
+        <p class="text-gray-500 mb-8 text-lg">تحدَّ أصدقاءك في عالم الأسئلة!</p>
+        <div class="bg-white rounded-2xl shadow-lg p-6 space-y-4">
+          <input id="nameInput" type="text" placeholder="اكتب اسمك هنا..." maxlength="20"
+            class="w-full px-4 py-3 rounded-xl border-2 border-indigo-100 focus:border-indigo-400 outline-none text-center text-lg transition" value="${state.playerName}">
+          ${joinMode && state.roomId ? `
+            <button onclick="joinRoom()" class="w-full py-3 bg-green-500 hover:bg-green-600 text-white rounded-xl font-bold text-lg transition">
+              🚪 انضم للغرفة
+            </button>
+          ` : `
+            <button onclick="createRoom()" class="w-full py-3 bg-indigo-500 hover:bg-indigo-600 text-white rounded-xl font-bold text-lg transition">
+              🎮 إنشاء غرفة
+            </button>
+          `}
+        </div>
+        <button id="adminBtn" onclick="goAdmin()" class="hidden mt-6 px-6 py-2 bg-gray-800 text-white rounded-lg text-sm font-bold hover:bg-gray-700 transition">
+          🔐 Admin
+        </button>
+      </div>
+    </div>`;
+}
+
+function renderLettersHome(joinMode = false) {
+  const app = getApp();
+  app.innerHTML = `
+    <div class="h-full w-full flex items-center justify-center p-4">
+      <div class="fade-in text-center max-w-md w-full">
+        <button onclick="goLanding()" class="mb-5 px-4 py-2 bg-white/80 border border-slate-200 rounded-full text-sm font-black text-slate-600 hover:bg-white transition">↩ العودة إلى ميادين</button>
+        <div class="text-7xl mb-4">🔤</div>
+        <h1 class="text-5xl font-black text-emerald-700 mb-2">ميدان الحروف</h1>
+        <p class="text-gray-500 mb-8 text-lg">مدير يتحكم بالخلية، وبث مباشر منفصل للوحة الحروف.</p>
+        <div class="bg-white rounded-2xl shadow-lg p-6 space-y-4">
+          <input id="nameInput" type="text" placeholder="اكتب اسمك هنا..." maxlength="20"
+            class="w-full px-4 py-3 rounded-xl border-2 border-emerald-100 focus:border-emerald-400 outline-none text-center text-lg transition" value="${state.playerName}">
+          ${joinMode && state.roomId ? `
+            <button onclick="joinRoom()" class="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-bold text-lg transition">
+              🚪 انضم للغرفة
+            </button>
+          ` : `
+            <button onclick="createRoom()" class="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-bold text-lg transition">
+              🎮 إنشاء غرفة
+            </button>
+          `}
+        </div>
+        <button id="adminBtn" onclick="goAdmin()" class="hidden mt-6 px-6 py-2 bg-gray-800 text-white rounded-lg text-sm font-bold hover:bg-gray-700 transition">
+          🔐 Admin
+        </button>
+      </div>
+    </div>`;
+}
+
+function buildLettersBoardState() {
+  const availableLetters = getAvailableLettersForBoard();
+  if (!availableLetters.includes(REQUIRED_BOARD_LETTER) || availableLetters.length < LETTERS_BOARD_SIZE) return null;
+  const pickedLetters = shuffleArray([
+    REQUIRED_BOARD_LETTER,
+    ...shuffleArray(availableLetters.filter(letter => letter !== REQUIRED_BOARD_LETTER)).slice(0, LETTERS_BOARD_SIZE - 1)
+  ]);
+  const cells = {};
+  pickedLetters.forEach((letter, i) => {
+    cells[`c${i}`] = { id: `c${i}`, index: i, letter, owner: '' };
+  });
+  return {
+    currentCellId: '',
+    currentQuestion: null,
+    liveResult: null,
+    usedQuestionIds: {},
+    cells
+  };
+}
+
+async function createLettersRoom() {
+  const name = document.getElementById('nameInput').value.trim();
+  if (!name) { shakeEl('nameInput'); return; }
+  state.playerName = name;
+  state.playerId = genId();
+  state.roomId = genId();
+  state.isHost = true;
+  state.lettersPanel = '';
+  state.hostPanelOpen = false;
+  await loadQuestionsFromFirebase();
+  if (!state.questions.length) {
+    showToast('أضف أسئلة الحروف من لوحة الإدارة أولًا');
+    return;
+  }
+  const availableLetters = getAvailableLettersForBoard();
+  if (!availableLetters.includes(REQUIRED_BOARD_LETTER)) {
+    showToast('أضف أسئلة لحرف الألف أولًا');
+    return;
+  }
+  if (availableLetters.length < LETTERS_BOARD_SIZE) {
+    showToast(`أضف أسئلة لـ ${LETTERS_BOARD_SIZE} حرفًا مختلفًا على الأقل. الموجود الآن ${availableLetters.length}`);
+    return;
+  }
+  const boardState = buildLettersBoardState();
+  if (!boardState) {
+    showToast('تعذّر تجهيز لوحة الحروف');
+    return;
+  }
+  const roomData = {
+    id: state.roomId,
+    game: 'letters',
+    host: state.playerId,
+    status: 'lobby',
+    managerKey: genId() + genId(),
+    liveKey: genId() + genId(),
+    players: {
+      [state.playerId]: { name, id: state.playerId, emoji: '🎛️', color: '', score: 0, ready: true, role: 'manager', team: '' }
+    },
+    letters: {
+      ...boardState,
+      showQuestionInLive: false,
+      liveResult: null,
+      winnerTeam: '',
+      winnerAt: null
+    },
+    created: Date.now()
+  };
+  await getLettersRoomRef(state.roomId).set(roomData);
+  listenLettersRoom(state.roomId);
+  startPresenceTracking();
+  persistRoomSession();
+  setRoomUrl();
+  state.page = 'lobby';
+  renderCurrentPage();
+}
+
+async function joinLettersRoom() {
+  const name = document.getElementById('nameInput').value.trim();
+  if (!name) { shakeEl('nameInput'); return; }
+  const snap = await getLettersRoomRef(state.roomId).once('value');
+  const room = snap.val();
+  if (!room) { showToast('الغرفة غير موجودة'); return; }
+  const playerCount = getLettersPlayerCount(room);
+  if (room.status !== 'lobby') { showToast('بدأت اللعبة بالفعل'); return; }
+  if (playerCount >= LETTERS_PLAYER_LIMIT) { showToast(`الغرفة ممتلئة (${LETTERS_PLAYER_LIMIT}/${LETTERS_PLAYER_LIMIT})`); return; }
+  state.playerName = name;
+  state.playerId = genId();
+  state.isHost = false;
+  state.lettersPanel = '';
+  state.hostPanelOpen = false;
+  const idx = playerCount;
+  await getLettersRoomRef(state.roomId).child('players/' + state.playerId).set({
+    name, id: state.playerId, emoji: PLAYER_EMOJIS[idx % PLAYER_EMOJIS.length] || '😀', color: '', score: 0, ready: false, role: 'player', team: ''
+  });
+  listenLettersRoom(state.roomId);
+  startPresenceTracking();
+  persistRoomSession();
+  setRoomUrl();
+  state.page = 'lobby';
+  renderCurrentPage();
+}
+
+async function createRoom() {
+  if (isLettersMode()) {
+    await createLettersRoom();
+    return;
+  }
+  const name = document.getElementById('nameInput').value.trim();
+  if (!name) { shakeEl('nameInput'); return; }
+  state.playerName = name;
+  state.playerId = genId();
+  state.roomId = genId();
+  state.isHost = true;
+  state.hostPanelOpen = false;
+  await loadQuestionsFromFirebase();
+  const roomData = {
+    id: state.roomId,
+    host: state.playerId,
+    status: 'lobby',
+    players: {
+      [state.playerId]: { name, id: state.playerId, emoji: PLAYER_EMOJIS[0], color: '', score: 0, ready: false }
+    },
+    created: Date.now()
+  };
+  await db.ref('rooms/' + state.roomId).set(roomData);
+  listenRoom(state.roomId);
+  startPresenceTracking();
+  persistRoomSession();
+  setRoomUrl();
+  state.page = 'lobby';
+  renderCurrentPage();
+}
+
+async function joinRoom() {
+  if (isLettersMode()) {
+    await joinLettersRoom();
+    return;
+  }
+  const name = document.getElementById('nameInput').value.trim();
+  if (!name) { shakeEl('nameInput'); return; }
+  const snap = await db.ref('rooms/' + state.roomId).once('value');
+  const room = snap.val();
+  if (!room) { showToast('الغرفة غير موجودة'); return; }
+  const playerCount = room.players ? Object.keys(room.players).length : 0;
+  if (playerCount >= 4) { showToast('الغرفة ممتلئة (4/4)'); return; }
+  if (room.status !== 'lobby') { showToast('اللعبة بدأت بالفعل'); return; }
+  state.playerName = name;
+  state.playerId = genId();
+  state.isHost = false;
+  state.hostPanelOpen = false;
+  const idx = playerCount;
+  await db.ref('rooms/' + state.roomId + '/players/' + state.playerId).set({
+    name, id: state.playerId, emoji: PLAYER_EMOJIS[idx] || '😀', color: '', score: 0, ready: false
+  });
+  listenRoom(state.roomId);
+  startPresenceTracking();
+  persistRoomSession();
+  setRoomUrl();
+  state.page = 'lobby';
+  renderCurrentPage();
+}
+
+// ====== LOBBY ======
+function renderLobby() {
+  if (isLettersMode()) {
+    renderLettersLobby();
+    return;
+  }
+  const room = state.room;
+  if (!room) return;
+  if (room.status && room.status !== 'lobby') {
+    state.page = room.status;
+    renderCurrentPage();
+    return;
+  }
+  const players = room.players ? Object.values(room.players) : [];
+  const link = buildShareLink();
+  const app = getApp();
+  app.innerHTML = `
+    <div class="h-full w-full flex items-center justify-center p-4">
+      <div class="fade-in text-center max-w-lg w-full">
+        <h2 class="text-3xl font-black text-indigo-700 mb-1">⚔️ ${config.game_title || 'الميدان'}</h2>
+        <p class="text-gray-400 mb-4">غرفة الانتظار</p>
+        <div class="bg-white rounded-2xl shadow-lg p-5 mb-4">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-sm text-gray-500">رمز الغرفة</span>
+            <span class="text-2xl font-black tracking-widest text-indigo-600">${state.roomId}</span>
+          </div>
+          <div class="flex gap-2">
+            <input readonly value="${link}" class="flex-1 px-3 py-2 bg-gray-50 rounded-lg text-xs text-gray-600 outline-none">
+            <button onclick="navigator.clipboard.writeText('${link}');showToast('تم نسخ الرابط!')" class="px-4 py-2 bg-indigo-100 text-indigo-600 rounded-lg font-bold text-sm hover:bg-indigo-200 transition">
+              📋 نسخ
+            </button>
+          </div>
+        </div>
+        <div class="bg-white rounded-2xl shadow-lg p-5 mb-4">
+          <p class="text-gray-500 text-sm mb-3">اللاعبون (${players.length}/4)</p>
+          <div class="flex justify-center gap-6 flex-wrap">
+            ${players.map(p => `
+              <div class="text-center">
+                <div class="text-4xl mb-1">${p.emoji}</div>
+                <p class="text-sm font-bold ${p.id === state.playerId ? 'text-indigo-600' : 'text-gray-700'}">${p.name}</p>
+                ${renderPresenceBadge(p.id)}
+                ${p.id === room.host ? '<span class="text-xs text-amber-500">👑 المضيف</span>' : ''}
+              </div>
+            `).join('')}
+          </div>
+        </div>
+        ${state.isHost && players.length >= 2 ? `
+          <button onclick="goColorPick()" class="w-full py-3 bg-indigo-500 hover:bg-indigo-600 text-white rounded-xl font-bold text-lg transition">
+            التالي ←
+          </button>
+        ` : !state.isHost ? `
+          <p class="text-gray-400 text-sm">في انتظار المضيف...</p>
+        ` : `
+          <p class="text-gray-400 text-sm">بانتظار لاعب آخر على الأقل...</p>
+        `}
+      </div>
+    </div>`;
+}
+
+function getLettersPlayerLink(roomId = state.roomId) {
+  return buildRouteUrl({ game: 'letters', room: roomId });
+}
+
+function getLettersManagerLink(room = state.room) {
+  return buildRouteUrl({ game: 'letters', room: room?.id || state.roomId, panel: 'manager', token: room?.managerKey || '' });
+}
+
+function getLettersLiveLink(room = state.room) {
+  return buildRouteUrl({ game: 'letters', room: room?.id || state.roomId, panel: 'live', token: room?.liveKey || '' });
+}
+
+function renderLettersLobby() {
+  const room = state.room;
+  if (!room) return;
+  if (room.status && room.status !== 'lobby') {
+    state.page = room.status;
+    renderCurrentPage();
+    return;
+  }
+  const players = getLettersPlayers(room);
+  const manager = getLettersManager(room);
+  const joinLink = getLettersPlayerLink(room.id);
+  const managerLink = getLettersManagerLink(room);
+  const liveLink = getLettersLiveLink(room);
+  const app = getApp();
+  app.innerHTML = `
+    <div class="h-full w-full flex items-center justify-center p-4">
+      <div class="fade-in text-center max-w-3xl w-full">
+        <h2 class="text-3xl font-black text-emerald-700 mb-1">🔤 ميدان الحروف</h2>
+        <p class="text-gray-400 mb-4">غرفة الحروف</p>
+        ${state.isHost ? `
+          <div class="grid gap-4 md:grid-cols-3 mb-4">
+            ${[
+              { title: 'رابط اللاعبين', value: joinLink, bg: 'from-emerald-500 to-teal-500' },
+              { title: 'رابط المدير', value: managerLink, bg: 'from-amber-500 to-orange-500' },
+              { title: 'رابط البث المباشر', value: liveLink, bg: 'from-rose-500 to-red-500' }
+            ].map(item => `
+              <div class="bg-white rounded-2xl shadow-lg p-4 text-right">
+                <div class="h-2 rounded-full bg-gradient-to-l ${item.bg} mb-3"></div>
+                <p class="text-sm font-black text-slate-700 mb-2">${item.title}</p>
+                <input readonly value="${item.value}" class="w-full px-3 py-2 bg-slate-50 rounded-lg text-[11px] text-slate-600 outline-none mb-2">
+                <button onclick="navigator.clipboard.writeText('${item.value}');showToast('تم نسخ الرابط')" class="w-full py-2 rounded-xl bg-slate-900 text-white text-sm font-black hover:bg-slate-800 transition">نسخ الرابط</button>
+              </div>
+            `).join('')}
+          </div>
+        ` : ''}
+        <div class="bg-white rounded-2xl shadow-lg p-5 mb-4">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-sm text-gray-500">رمز الغرفة</span>
+            <span class="text-2xl font-black tracking-widest text-emerald-600">${state.roomId}</span>
+          </div>
+          <div class="mb-4 p-3 rounded-2xl bg-amber-50 border border-amber-200 text-right">
+            <p class="text-sm font-black text-amber-700">مدير اللعبة</p>
+            <p class="text-slate-700 font-bold mt-1">${manager?.emoji || '🎛️'} ${manager?.name || '—'}</p>
+            ${manager ? renderPresenceBadge(manager.id, false) : ''}
+          </div>
+          <div class="flex justify-center gap-6 flex-wrap">
+            ${players.map(p => `
+              <div class="text-center">
+                <div class="text-4xl mb-1">${p.emoji}</div>
+                <p class="text-sm font-bold ${p.id === state.playerId ? 'text-emerald-600' : 'text-gray-700'}">${p.name}</p>
+                ${renderPresenceBadge(p.id)}
+                ${p.team ? `<span class="text-xs font-black mt-1 inline-block" style="color:${getLettersTeamMeta(p.team).hex}">${getLettersTeamMeta(p.team).name}</span>` : '<span class="text-xs text-slate-400">بانتظار اختيار الفريق</span>'}
+              </div>
+            `).join('')}
+          </div>
+        </div>
+        ${state.isHost ? `
+          <div class="flex flex-col md:flex-row gap-3 justify-center">
+            <a href="${managerLink}" target="_blank" rel="noopener noreferrer" class="px-6 py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-black transition">فتح لوحة المدير</a>
+            <button onclick="goColorPick()" class="px-6 py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-black transition ${players.length < 2 ? 'opacity-50 cursor-not-allowed' : ''}" ${players.length < 2 ? 'disabled' : ''}>بدء اللعبة</button>
+          </div>
+          ${players.length < 2 ? '<p class="mt-3 text-sm text-slate-400">يلزم لاعبان على الأقل قبل البدء.</p>' : ''}
+        ` : `
+          <p class="text-gray-500 text-sm font-bold">بانتظار منشئ الغرفة لبدء اللعبة</p>
+        `}
+      </div>
+    </div>`;
+}
+
+function getLettersCells(room = state.room) {
+  const cells = room?.letters?.cells ? Object.values(room.letters.cells) : [];
+  return cells.sort((a, b) => Number(a.index || 0) - Number(b.index || 0));
+}
+
+function getLettersColumns(room = state.room) {
+  const cells = getLettersCells(room);
+  const cols = [];
+  for (let i = 0; i < 5; i++) cols.push(cells.slice(i * 5, (i + 1) * 5));
+  return cols;
+}
+
+function getLettersCellColor(cell, room = state.room) {
+  const currentCellId = room?.letters?.currentCellId || '';
+  if (!cell) return '#fff9c4';
+  if (cell.owner === 'green') return '#16a34a';
+  if (cell.owner === 'red') return '#ef4444';
+  if (cell.id === currentCellId) return '#facc15';
+  return '#fff9c4';
+}
+
+function renderLettersHex({ x = 0, y = 0, content = '', bg = '#fff9c4', textColor = '#111827', onClick = '', compact = false, title = '' } = {}) {
+  const width = 96;
+  const height = 84;
+  const strokeWidth = 4.5;
+  const fontSize = 52;
+  const points = [
+    [x + width * 0.25, y],
+    [x + width * 0.75, y],
+    [x + width, y + height * 0.5],
+    [x + width * 0.75, y + height],
+    [x + width * 0.25, y + height],
+    [x, y + height * 0.5]
+  ].map(([px, py]) => `${px},${py}`).join(' ');
+  const groupAttrs = onClick ? ` onclick="${onClick}" style="cursor:pointer"` : '';
+  return `
+    <g${groupAttrs}>
+      ${title ? `<title>${title}</title>` : ''}
+      <polygon points="${points}" fill="${bg}" stroke="#111827" stroke-width="${strokeWidth}" stroke-linejoin="round" filter="url(#lettersShadow)"></polygon>
+      ${content ? `<text x="${x + (width / 2)}" y="${y + (height / 2) + 4}" text-anchor="middle" dominant-baseline="middle" font-size="${fontSize}" font-weight="900" fill="${textColor}" style="paint-order:stroke;stroke:rgba(255,255,255,0.25);stroke-width:1.2px">${content}</text>` : ''}
+    </g>`;
+}
+
+function renderLettersBoard(room = state.room, { interactive = false } = {}) {
+  const columns = getLettersColumns(room);
+  const boardWidth = 656;
+  const boardHeight = 692;
+  const topBottomColor = '#ef4444';
+  const sideColor = '#16a34a';
+  const hexWidth = 96;
+  const hexHeight = 84;
+  const columnStep = 72;
+  const cellStepY = 84;
+  const columnOffsetY = 42;
+  const columnStartX = 164;
+  const columnBaseY = 120;
+  const topBottomYTop = 36;
+  const topBottomYBottom = 540;
+  const topBottomStartX = columnStartX;
+  const topBottomStep = columnStep;
+  const sideStartY = 78;
+  const sideStep = cellStepY;
+  const leftStackX = columnStartX - columnStep;
+  const rightStackX = columnStartX + (4 * columnStep) + columnStep;
+  const svgParts = [];
+
+  svgParts.push(`
+    <defs>
+      <filter id="lettersShadow" x="-20%" y="-20%" width="140%" height="140%">
+        <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#0f172a" flood-opacity="0.16"></feDropShadow>
+      </filter>
+    </defs>
+  `);
+
+  for (let i = 0; i < 5; i++) {
+    const x = topBottomStartX + (i * topBottomStep);
+    const topY = topBottomYTop + (i % 2 ? columnOffsetY : 0);
+    const bottomY = topBottomYBottom + (i % 2 ? columnOffsetY : 0);
+    svgParts.push(renderLettersHex({ x, y: topY, bg: topBottomColor, compact: true }));
+    svgParts.push(renderLettersHex({ x, y: bottomY, bg: topBottomColor, compact: true }));
+  }
+
+  for (let i = 0; i < 7; i++) {
+    const y = sideStartY + (i * sideStep);
+    svgParts.push(renderLettersHex({ x: leftStackX, y, bg: sideColor, compact: true }));
+    svgParts.push(renderLettersHex({ x: rightStackX, y, bg: sideColor, compact: true }));
+  }
+
+  columns.forEach((cells, columnIndex) => {
+    const x = columnStartX + (columnIndex * columnStep);
+    const startY = columnBaseY + (columnIndex % 2 ? columnOffsetY : 0);
+    cells.forEach((cell, rowIndex) => {
+      svgParts.push(renderLettersHex({
+        x,
+        y: startY + (rowIndex * cellStepY),
+        content: cell.owner ? '' : cell.letter,
+        bg: getLettersCellColor(cell, room),
+        textColor: cell.owner ? '#ffffff' : '#111827',
+        onClick: interactive && !cell.owner ? `selectLettersCell('${cell.id}')` : '',
+        title: interactive && !cell.owner ? 'اختر هذا الحرف' : ''
+      }));
+    });
+  });
+
+  return `
+    <div class="rounded-[2.5rem] bg-[#111827] p-2 md:p-3 shadow-2xl overflow-hidden">
+      <svg viewBox="0 0 ${boardWidth} ${boardHeight}" class="block w-full h-auto max-w-[720px] mx-auto" xmlns="http://www.w3.org/2000/svg" aria-label="لوحة ميدان الحروف" preserveAspectRatio="xMidYMid meet">
+        <rect x="0" y="0" width="${boardWidth}" height="${boardHeight}" rx="42" fill="#111827"></rect>
+        ${svgParts.join('')}
+      </svg>
+    </div>`;
+}
+
+async function listenLettersRoom(roomId) {
+  cleanupListeners();
+  const ref = getLettersRoomRef(roomId);
+  const cb = ref.on('value', snap => {
+    const data = snap.val();
+    if (!data) {
+      resetRoomState();
+      return;
+    }
+    const previousRoom = state.room;
+    const previousSignature = getLettersRenderSignature(previousRoom);
+    state.room = data;
+    if (!state.lettersPanel && state.playerId) {
+      if (data.players && !data.players[state.playerId]) {
+        resetRoomState();
+        showToast('تم إخراجك من الغرفة');
+        return;
+      }
+      state.isHost = data.host === state.playerId;
+      state.playerName = data.players?.[state.playerId]?.name || state.playerName;
+      persistRoomSession();
+      setRoomUrl(data.id || state.roomId);
+    }
+    if (data.chat) {
+      const msgs = Object.values(data.chat).sort((a, b) => Number(a.time || 0) - Number(b.time || 0));
+      const chatVisible = ['game', 'winner', 'lettersLive'].includes(state.page) || state.chatOpen;
+      if (!chatVisible) {
+        const newCount = msgs.length - state.chatMessages.length;
+        if (newCount > 0) state.unreadCount += newCount;
+      } else {
+        state.unreadCount = 0;
+      }
+      state.chatMessages = msgs;
+    } else {
+      state.chatMessages = [];
+      state.unreadCount = 0;
+    }
+    const nextSignature = getLettersRenderSignature(data);
+    const onlyChatChanged = !!previousRoom && previousSignature === nextSignature;
+    if (onlyChatChanged && !state.lettersPanel && ['game', 'winner'].includes(state.page) && updateLettersGameChatInPlace()) {
+      return;
+    }
+    renderCurrentPage();
+  });
+  state.listeners.push({ ref, cb });
+}
+
+async function bootstrapLettersPanel(roomId, panel, token) {
+  const snap = await getLettersRoomRef(roomId).once('value');
+  const room = snap.val();
+  if (!room) {
+    showToast('غرفة الحروف غير موجودة');
+    goLanding();
+    return;
+  }
+  const valid = panel === 'manager' ? token === room.managerKey : token === room.liveKey;
+  if (!valid) {
+    showToast('الرابط غير صالح');
+    goLanding();
+    return;
+  }
+  state.gameMode = 'letters';
+  state.lettersPanel = panel;
+  state.roomId = roomId;
+  state.room = room;
+  state.page = panel === 'manager' ? 'lettersManager' : 'lettersLive';
+  await loadQuestionsFromFirebase();
+  await listenLettersRoom(roomId);
+  renderCurrentPage();
+}
+
+async function selectLettersCell(cellId) {
+  const room = state.room;
+  if (!room || state.page !== 'lettersManager') return;
+  if (room.status !== 'game') {
+    showToast('ابدأ اللعبة أولًا');
+    return;
+  }
+  const cell = room.letters?.cells?.[cellId];
+  if (!cell || cell.owner) return;
+  if (!state.questions.length) await loadQuestionsFromFirebase();
+  const questions = getLettersQuestionsForLetter(cell.letter);
+  const used = room.letters?.usedQuestionIds || {};
+  let available = questions.filter(item => !used[item.id]);
+  if (!available.length) available = questions;
+  const picked = available[Math.floor(Math.random() * available.length)];
+  if (!picked) {
+    showToast(`لا توجد أسئلة للحرف ${cell.letter}`);
+    return;
+  }
+  await getLettersRoomRef().child('letters').update({
+    currentCellId: cellId,
+    liveResult: null,
+    currentQuestion: {
+      id: picked.id,
+      letter: picked.letter,
+      question: picked.question,
+      answer: picked.answer || ''
+    }
+  });
+}
+
+async function claimLettersCell(team, playerId = '') {
+  const room = state.room;
+  const currentCellId = room?.letters?.currentCellId;
+  const currentQuestion = room?.letters?.currentQuestion;
+  const answeredBy = room?.players?.[playerId] || (playerId ? null : getLettersTeamMembers(team, room)[0]) || null;
+  if (!currentCellId || !currentQuestion?.id) {
+    showToast('اختر حرفًا أولًا');
+    return;
+  }
+  if (!answeredBy || answeredBy.team !== team) {
+    showToast('اختر اللاعب الذي أجاب أولًا');
+    return;
+  }
+  const tx = await getLettersRoomRef().child('letters').transaction(letters => {
+    if (!letters?.currentCellId || !letters?.currentQuestion?.id) return;
+    const cell = letters.cells?.[letters.currentCellId];
+    if (!cell || cell.owner) return;
+    letters.cells[letters.currentCellId] = {
+      ...cell,
+      owner: team
+    };
+    letters.usedQuestionIds = letters.usedQuestionIds || {};
+    letters.usedQuestionIds[letters.currentQuestion.id] = true;
+    letters.liveResult = {
+      team,
+      playerId: answeredBy.id,
+      playerName: answeredBy.name,
+      answer: letters.currentQuestion.answer || '',
+      letter: letters.currentQuestion.letter || cell.letter || '',
+      shownAt: estimatedServerNow()
+    };
+    letters.currentCellId = '';
+    letters.currentQuestion = null;
+    letters.showQuestionInLive = false;
+    return letters;
+  });
+  if (!tx.committed) showToast('تعذر احتساب هذه الخلية الآن');
+}
+
+async function clearLettersSelection() {
+  if (!state.roomId) return;
+  await getLettersRoomRef().child('letters').update({
+    currentCellId: '',
+    currentQuestion: null,
+    liveResult: null,
+    showQuestionInLive: false
+  });
+}
+
+async function toggleLettersQuestionBroadcast() {
+  const room = state.room;
+  const currentQuestion = room?.letters?.currentQuestion;
+  if (!currentQuestion?.id) {
+    showToast('اختر حرفًا وسؤالًا أولًا');
+    return;
+  }
+  await getLettersRoomRef().child('letters/showQuestionInLive').set(!room?.letters?.showQuestionInLive);
+}
+
+function toggleLettersWinnerPicker(forceState) {
+  state.lettersWinnerPickerOpen = typeof forceState === 'boolean' ? forceState : !state.lettersWinnerPickerOpen;
+  if (state.page === 'lettersManager') renderLettersManager();
+}
+
+async function announceLettersWinner(team) {
+  const teamMeta = getLettersTeamMeta(team);
+  if (!window.confirm(`إعلان فوز ${teamMeta.name}؟`)) return;
+  state.lettersWinnerPickerOpen = false;
+  await getLettersRoomRef().update({
+    status: 'winner',
+    'letters/showQuestionInLive': false,
+    'letters/currentCellId': '',
+    'letters/currentQuestion': null,
+    'letters/liveResult': null,
+    'letters/winnerTeam': team,
+    'letters/winnerAt': firebase.database.ServerValue.TIMESTAMP
+  });
+}
+
+async function restartLettersRoom() {
+  await loadQuestionsFromFirebase();
+  const boardState = buildLettersBoardState();
+  if (!boardState) {
+    showToast('يلزم توفر 25 حرفًا مختلفًا مع الألف لإعادة اللعبة');
+    return;
+  }
+  const room = state.room;
+  const updates = {
+    status: 'lobby',
+    letters: {
+      ...boardState,
+      showQuestionInLive: false,
+      liveResult: null,
+      winnerTeam: '',
+      winnerAt: null
+    }
+  };
+  Object.values(room?.players || {}).forEach(player => {
+    const isManager = (player.role || 'player') === 'manager';
+    updates[`players/${player.id}/team`] = '';
+    updates[`players/${player.id}/color`] = '';
+    updates[`players/${player.id}/ready`] = isManager;
+  });
+  state.lettersWinnerPickerOpen = false;
+  await getLettersRoomRef().update(updates);
+}
+
+function renderLettersBroadcastQuestionCard(room = state.room, compact = false) {
+  const q = room?.letters?.currentQuestion;
+  if (!q) return '';
+  return `
+    <div class="mx-auto ${compact ? 'max-w-lg' : 'max-w-2xl'} bg-white rounded-[2rem] shadow-2xl border border-amber-100 p-5 md:p-7 text-center">
+      <p class="text-sm font-black tracking-[0.25em] text-amber-500 mb-3">السؤال المعروض</p>
+      <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-amber-100 text-4xl font-black text-amber-600 mb-4">${q.letter || '؟'}</div>
+      <p class="${compact ? 'text-xl leading-10' : 'text-3xl leading-[1.9]'} font-black text-slate-900">${q.question}</p>
+    </div>`;
+}
+
+function renderLettersLiveResultCard(room = state.room, compact = false) {
+  const result = getLettersActiveLiveResult(room);
+  if (!result) return '';
+  const teamMeta = getLettersTeamMeta(result.team);
+  return `
+    <div class="mx-auto ${compact ? 'max-w-lg' : 'max-w-2xl'} rounded-[2rem] shadow-2xl border-4 p-5 md:p-7 text-center" style="background:${teamMeta.soft};border-color:${teamMeta.hex}">
+      <p class="text-sm font-black tracking-[0.25em] mb-3" style="color:${teamMeta.hex}">إجابة صحيحة</p>
+      <div class="inline-flex items-center justify-center px-4 py-2 rounded-full text-sm font-black mb-4" style="background:${teamMeta.hex};color:#fff">
+        ${result.playerName || teamMeta.name}
+      </div>
+      <p class="${compact ? 'text-xl leading-10' : 'text-3xl leading-[1.8]'} font-black text-slate-900">${result.answer || 'تم احتساب الإجابة الصحيحة'}</p>
+      <p class="text-sm text-slate-600 mt-3">الحرف: ${result.letter || '—'} • ${teamMeta.name}</p>
+    </div>`;
+}
+
+function renderLettersWinnerSplash(room = state.room) {
+  const team = room?.letters?.winnerTeam;
+  if (!team) return '';
+  const teamMeta = getLettersTeamMeta(team);
+  const members = getLettersTeamMembers(team, room);
+  let confetti = '';
+  for (let i = 0; i < 18; i++) {
+    confetti += `<div class="confetti-piece" style="left:${Math.random() * 100}%;animation-delay:${Math.random() * 1.5}s;width:${8 + (Math.random() * 10)}px;height:${8 + (Math.random() * 10)}px;background:${teamMeta.hex};border-radius:${Math.random() > 0.5 ? '50%' : '3px'}"></div>`;
+  }
+  return `
+    <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+      ${confetti}
+      <div class="mx-4 rounded-[2rem] px-6 py-5 text-center shadow-2xl border-4" style="background:${teamMeta.soft};border-color:${teamMeta.hex}">
+        <p class="text-sm font-black tracking-[0.25em]" style="color:${teamMeta.hex}">الفائز</p>
+        <h3 class="text-4xl font-black mt-2" style="color:${teamMeta.hex}">${teamMeta.name}</h3>
+        <p class="text-sm text-slate-600 mt-2">${members.length ? members.map(player => player.name).join(' • ') : 'تم إعلان النتيجة'}</p>
+      </div>
+    </div>`;
+}
+
+function renderLettersStageContent(room = state.room, compact = false) {
+  const liveResult = getLettersActiveLiveResult(room);
+  const showQuestion = !!(room?.letters?.showQuestionInLive && room?.letters?.currentQuestion);
+  const body = liveResult
+    ? renderLettersLiveResultCard(room, compact)
+    : showQuestion
+      ? renderLettersBroadcastQuestionCard(room, compact)
+      : `<div class="mx-auto ${compact ? 'max-w-[390px]' : 'max-w-[720px]'}">${renderLettersBoard(room, { interactive: false })}</div>`;
+  return `
+    <div class="relative">
+      ${body}
+      ${room?.status === 'winner' ? renderLettersWinnerSplash(room) : ''}
+    </div>`;
+}
+
+function renderLettersGameChatPanel() {
+  const msgs = state.chatMessages || [];
+  return `
+    <div class="bg-white rounded-[2rem] shadow-xl border border-slate-200 overflow-hidden flex flex-col h-[320px] md:h-[360px]">
+      <div class="flex items-center justify-between p-4 border-b border-slate-100">
+        <h3 class="font-black text-lg text-slate-800">💬 الدردشة المباشرة</h3>
+        <span id="lettersGameChatCount" class="text-xs text-slate-400">${msgs.length} رسالة</span>
+      </div>
+      <div class="flex-1 overflow-auto p-4 space-y-2" id="lettersGameChatMessages">
+        ${renderLettersChatMessagesMarkup(msgs, state.room)}
+      </div>
+      <form onsubmit="sendChat(event, 'lettersChatInput')" class="p-3 border-t border-slate-100 flex gap-2">
+        <input id="lettersChatInput" value="${escapeHtml(state.chatDraft)}" oninput="rememberChatDraft(this.value)" type="text" placeholder="اكتب رسالة..." class="flex-1 px-3 py-2 border rounded-xl outline-none focus:border-emerald-400" maxlength="200">
+        <button type="submit" class="px-4 py-2 bg-emerald-500 text-white rounded-xl font-black hover:bg-emerald-600 transition">إرسال</button>
+      </form>
+    </div>`;
+}
+
+function renderLettersGame() {
+  const room = state.room;
+  if (!room) return;
+  if (!['game', 'winner'].includes(room.status)) {
+    state.page = room.status;
+    renderCurrentPage();
+    return;
+  }
+  const app = getApp();
+  app.innerHTML = `
+    <div class="min-h-full w-full p-4 md:p-6" style="background:linear-gradient(180deg,#f8fafc,#eef2ff)">
+      <div class="max-w-4xl mx-auto space-y-4">
+        <div class="max-w-3xl mx-auto bg-white/70 rounded-[2rem] border border-slate-200 shadow-xl p-3 md:p-4">
+          ${renderLettersStageContent(room, true)}
+        </div>
+        ${renderLettersGameChatPanel()}
+      </div>
+    </div>`;
+}
+
+function renderLettersWinner() {
+  renderLettersGame();
+}
+
+function renderLettersManager() {
+  const room = state.room;
+  if (!room) return;
+  const q = room.letters?.currentQuestion;
+  const showInLive = !!room.letters?.showQuestionInLive;
+  const winnerMeta = room.letters?.winnerTeam ? getLettersTeamMeta(room.letters.winnerTeam) : null;
+  const canClaim = room.status === 'game' && !!q;
+  const app = getApp();
+  app.innerHTML = `
+    <div class="min-h-full w-full p-4 md:p-6" style="background:linear-gradient(135deg,#f8fafc,#ecfccb)">
+      <div class="max-w-6xl mx-auto space-y-5">
+        <div class="text-center">
+          <p class="text-sm font-black tracking-[0.2em] text-emerald-700 mb-2">لوحة المدير</p>
+          <h2 class="text-4xl font-black text-slate-900">ميدان الحروف</h2>
+          <p class="text-sm text-slate-500 mt-2">${room.status === 'lobby' ? 'بانتظار بدء اللعبة من صفحة الغرفة' : room.status === 'colorPick' ? 'بانتظار اكتمال اختيار الفرق' : room.status === 'winner' ? `تم إعلان فوز ${winnerMeta?.name || ''}` : 'اختر حرفًا ثم اعرض السؤال أو احتسبه لأحد الفريقين'}</p>
+        </div>
+        ${renderLettersBoard(room, { interactive: room.status === 'game' })}
+        <div class="bg-white rounded-3xl shadow-xl p-5">
+          <div class="flex items-center justify-between gap-3 flex-wrap mb-4">
+            <div>
+              <p class="text-sm text-slate-400">الحرف المختار</p>
+              <p class="text-2xl font-black text-slate-900">${q?.letter || '—'}</p>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <button onclick="clearLettersSelection()" class="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-black hover:bg-slate-200 transition">إلغاء التحديد</button>
+              <button onclick="toggleLettersQuestionBroadcast()" class="px-4 py-2 rounded-xl ${showInLive ? 'bg-slate-900 text-white hover:bg-slate-800' : 'bg-amber-100 text-amber-700 hover:bg-amber-200'} font-black transition ${q ? '' : 'opacity-50 cursor-not-allowed'}" ${q ? '' : 'disabled'}>${showInLive ? 'إخفاء من البث' : 'عرض في البث'}</button>
+            </div>
+          </div>
+          <div class="min-h-[110px] rounded-2xl bg-slate-50 p-4 border border-slate-200">
+            ${q ? `
+              <p class="text-xl font-black text-slate-900 leading-9">${q.question}</p>
+              <p class="text-sm text-slate-400 mt-2">الإجابة: ${q.answer || 'غير محددة'}</p>
+            ` : `
+              <p class="text-slate-400 font-bold text-center py-8">اضغط على حرف لعرض سؤاله</p>
+            `}
+          </div>
+          <div class="mt-4">
+            <p class="text-sm font-black text-slate-500 mb-3">من الذي أجاب؟</p>
+            <div class="grid md:grid-cols-2 gap-3">
+              ${LETTERS_TEAMS.map(team => {
+                const members = getLettersTeamMembers(team.id, room);
+                return `
+                  <div class="rounded-3xl p-4 border-2" style="background:${team.soft};border-color:${team.hex}">
+                    <p class="font-black text-lg mb-3" style="color:${team.hex}">${team.name}</p>
+                    ${members.length ? `
+                      <div class="grid gap-2">
+                        ${members.map(player => `
+                          <button onclick="claimLettersCell('${team.id}','${player.id}')" class="py-3 rounded-2xl text-white font-black transition ${canClaim ? '' : 'opacity-50 cursor-not-allowed'}" style="background:${team.hex}" ${canClaim ? '' : 'disabled'}>
+                            ${player.name}
+                          </button>
+                        `).join('')}
+                      </div>
+                    ` : `
+                      <p class="text-sm text-slate-500">لا يوجد لاعبون في هذا الفريق</p>
+                    `}
+                  </div>`;
+              }).join('')}
+            </div>
+          </div>
+          <div class="mt-5 pt-5 border-t border-slate-200 flex flex-wrap items-center gap-3 justify-between">
+            <div class="flex items-center gap-2 flex-wrap">
+              <button onclick="toggleLettersWinnerPicker()" class="px-4 py-2 rounded-xl bg-slate-900 text-white text-sm font-black hover:bg-slate-800 transition">إعلان الفوز</button>
+              ${state.lettersWinnerPickerOpen ? `
+                <button onclick="announceLettersWinner('green')" class="px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-black hover:bg-emerald-700 transition">فوز الأخضر</button>
+                <button onclick="announceLettersWinner('red')" class="px-3 py-2 rounded-xl bg-red-600 text-white text-sm font-black hover:bg-red-700 transition">فوز الأحمر</button>
+              ` : ''}
+            </div>
+            <button onclick="restartLettersRoom()" class="px-4 py-2 rounded-xl bg-indigo-500 text-white text-sm font-black hover:bg-indigo-600 transition">إعادة اللعبة</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderLettersLive() {
+  const room = state.room;
+  if (!room) return;
+  const app = getApp();
+  app.innerHTML = `
+    <div class="min-h-full w-full flex items-center justify-center p-3 md:p-6" style="background:radial-gradient(circle at top,#f8fafc,#e2e8f0)">
+      <div class="w-full max-w-5xl">
+        ${renderLettersStageContent(room, false)}
+      </div>
+    </div>`;
+}
+
+async function goColorPick() {
+  if (isLettersMode()) {
+    await goLettersColorPick();
+    return;
+  }
+  await db.ref('rooms/' + state.roomId + '/status').set('colorPick');
+  state.page = 'colorPick';
+}
+
+async function goLettersColorPick() {
+  const room = state.room;
+  if (!room) return;
+  const updates = { status: 'colorPick' };
+  getLettersPlayers(room).forEach(player => {
+    updates[`players/${player.id}/team`] = '';
+    updates[`players/${player.id}/color`] = '';
+    updates[`players/${player.id}/ready`] = false;
+  });
+  await getLettersRoomRef().update(updates);
+  state.page = 'colorPick';
+}
+
+async function pickLettersTeam(teamId) {
+  const teamMeta = getLettersTeamMeta(teamId);
+  const tx = await getLettersRoomRef().child('players').transaction(players => {
+    if (!players?.[state.playerId]) return players;
+    const me = players[state.playerId];
+    if ((me.role || 'player') === 'manager') return players;
+    const currentTeam = me.team || '';
+    const taken = Object.values(players).filter(player =>
+      (player.role || 'player') !== 'manager' &&
+      player.id !== state.playerId &&
+      player.team === teamId
+    ).length;
+    if (currentTeam !== teamId && taken >= LETTERS_TEAM_LIMIT) return;
+    me.team = teamId;
+    me.color = teamMeta.hex;
+    me.ready = true;
+    players[state.playerId] = me;
+    return players;
+  });
+  if (!tx.committed) showToast('تعذر اختيار الفريق الآن');
+}
+
+async function startLettersGame() {
+  const room = state.room;
+  const players = getLettersPlayers(room);
+  if (players.length < 2) {
+    showToast('يلزم لاعبان على الأقل');
+    return;
+  }
+  if (players.some(player => !player.team)) {
+    showToast('يجب أن يختار جميع اللاعبين فرقهم أولًا');
+    return;
+  }
+  await getLettersRoomRef().update({
+    status: 'game',
+    'letters/showQuestionInLive': false,
+    'letters/currentCellId': '',
+    'letters/currentQuestion': null,
+    'letters/liveResult': null,
+    'letters/winnerTeam': '',
+    'letters/winnerAt': null
+  });
+  state.page = 'game';
+}
+
+// ====== COLOR PICK ======
+function renderColorPick() {
+  if (isLettersMode()) {
+    renderLettersColorPick();
+    return;
+  }
+  const room = state.room;
+  if (!room) return;
+  if (room.status === 'colorPick' && state.page !== 'colorPick') state.page = 'colorPick';
+  if (room.status !== 'colorPick') { state.page = room.status; renderCurrentPage(); return; }
+  const players = room.players ? Object.values(room.players) : [];
+  const takenColors = players.map(p => p.color).filter(Boolean);
+  const myPlayer = players.find(p => p.id === state.playerId);
+  const myColor = myPlayer?.color || '';
+  const allPicked = players.every(p => p.color);
+  const app = getApp();
+  app.innerHTML = `
+    <div class="h-full w-full flex items-center justify-center p-4">
+      <div class="fade-in text-center max-w-lg w-full">
+        <h2 class="text-2xl font-black text-indigo-700 mb-4">🎨 اختر لونك</h2>
+        <div class="flex justify-center gap-6 mb-6 flex-wrap">
+          ${players.map(p => `
+            <div class="text-center">
+              <div class="text-3xl mb-1">${p.emoji}</div>
+              <p class="text-sm font-bold">${p.name}</p>
+              ${renderPresenceBadge(p.id)}
+              ${p.color ? `<div class="w-6 h-6 rounded-full mx-auto mt-1" style="background:${p.color}"></div>` : '<p class="text-xs text-gray-400">يختار...</p>'}
+            </div>
+          `).join('')}
+        </div>
+        <div class="bg-white rounded-2xl shadow-lg p-6 mb-4">
+          <div class="grid grid-cols-3 gap-4">
+            ${COLORS.map(c => {
+              const taken = takenColors.includes(c.hex) && myColor !== c.hex;
+              const selected = myColor === c.hex;
+              return `<button onclick="${taken ? '' : `pickColor('${c.hex}')`}"
+                class="p-4 rounded-xl border-2 transition ${selected ? 'border-indigo-500 ring-2 ring-indigo-300' : taken ? 'opacity-20 cursor-not-allowed border-gray-200' : 'border-gray-200 hover:border-indigo-300 cursor-pointer'}"
+                ${taken ? 'disabled' : ''}>
+                <div class="w-10 h-10 rounded-full mx-auto mb-1" style="background:${c.hex}"></div>
+                <p class="text-xs font-bold text-gray-600">${c.name}</p>
+              </button>`;
+            }).join('')}
+          </div>
+        </div>
+        ${state.isHost && allPicked ? `
+          <button onclick="goCatPick()" class="w-full py-3 bg-indigo-500 hover:bg-indigo-600 text-white rounded-xl font-bold text-lg transition">التالي ←</button>
+        ` : ''}
+      </div>
+    </div>`;
+}
+
+function renderLettersColorPick() {
+  const room = state.room;
+  if (!room) return;
+  if (room.status !== 'colorPick') { state.page = room.status; renderCurrentPage(); return; }
+  const manager = getLettersManager(room);
+  const players = getLettersPlayers(room);
+  const myPlayer = players.find(player => player.id === state.playerId);
+  const myTeam = myPlayer?.team || '';
+  const allPicked = players.length >= 2 && players.every(player => !!player.team);
+  const app = getApp();
+  app.innerHTML = `
+    <div class="h-full w-full flex items-center justify-center p-4">
+      <div class="fade-in text-center max-w-2xl w-full">
+        <h2 class="text-3xl font-black text-emerald-700 mb-2">اختيار الفريق</h2>
+        <p class="text-slate-400 mb-4">اللاعبون يختارون بين الأخضر والأحمر، والمدير يدير اللعبة فقط.</p>
+        <div class="mb-4 p-4 rounded-2xl bg-white shadow text-right">
+          <p class="text-sm font-black text-amber-600">مدير الغرفة</p>
+          <p class="font-bold text-slate-800 mt-1">${manager?.emoji || '🎛️'} ${manager?.name || '—'}</p>
+          ${manager ? renderPresenceBadge(manager.id, false) : ''}
+        </div>
+        <div class="grid gap-3 md:grid-cols-2 mb-4">
+          ${LETTERS_TEAMS.map(team => {
+            const members = getLettersTeamMembers(team.id, room);
+            const teamFull = members.length >= LETTERS_TEAM_LIMIT && myTeam !== team.id;
+            const selected = myTeam === team.id;
+            return `
+              <button onclick="${state.isHost || !myPlayer || teamFull ? '' : `pickLettersTeam('${team.id}')`}" ${state.isHost || !myPlayer || teamFull ? 'disabled' : ''}
+                class="rounded-3xl p-5 text-right border-2 transition ${selected ? 'scale-[1.01]' : ''} ${teamFull ? 'opacity-50 cursor-not-allowed' : 'hover:-translate-y-0.5'}"
+                style="background:${team.soft};border-color:${selected ? team.hex : team.hex + '55'}">
+                <p class="text-xl font-black mb-1" style="color:${team.hex}">${team.name}</p>
+                <p class="text-sm text-slate-500 mb-3">${members.length}/${LETTERS_TEAM_LIMIT} لاعبين</p>
+                <div class="space-y-1 text-sm font-bold text-slate-700">
+                  ${members.length ? members.map(player => `<p>${player.emoji} ${player.name}</p>`).join('') : '<p class="text-slate-400">لا يوجد أحد بعد</p>'}
+                </div>
+              </button>`;
+          }).join('')}
+        </div>
+        <div class="bg-white rounded-2xl shadow-lg p-5 mb-4">
+          <p class="text-sm text-slate-500 mb-3">اللاعبون (${players.length}/${LETTERS_PLAYER_LIMIT})</p>
+          <div class="flex justify-center gap-5 flex-wrap">
+            ${players.map(player => `
+              <div class="text-center">
+                <div class="text-4xl mb-1">${player.emoji}</div>
+                <p class="text-sm font-bold ${player.id === state.playerId ? 'text-emerald-600' : 'text-slate-700'}">${player.name}</p>
+                ${player.team ? `<p class="text-xs font-black mt-1" style="color:${getLettersTeamMeta(player.team).hex}">${getLettersTeamMeta(player.team).name}</p>` : '<p class="text-xs text-slate-400">لم يختر بعد</p>'}
+                ${renderPresenceBadge(player.id)}
+              </div>
+            `).join('')}
+          </div>
+        </div>
+        ${state.isHost ? `
+          <button onclick="startLettersGame()" class="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-black text-lg transition ${allPicked ? '' : 'opacity-50 cursor-not-allowed'}" ${allPicked ? '' : 'disabled'}>بدء اللعبة</button>
+        ` : `
+          <p class="text-sm font-bold text-slate-500">بانتظار منشئ الغرفة لبدء اللعبة بعد اكتمال اختيار الفرق</p>
+        `}
+      </div>
+    </div>`;
+}
+
+async function pickColor(hex) {
+  await db.ref(`rooms/${state.roomId}/players/${state.playerId}/color`).set(hex);
+}
+
+async function goCatPick() {
+  await loadQuestionsFromFirebase();
+  await db.ref(`rooms/${state.roomId}/status`).set('catPick');
+  await db.ref(`rooms/${state.roomId}/allCategories`).set(state.categories);
+  state.page = 'catPick';
+}
+
+// ====== CATEGORY PICK ======
+function renderCatPick() {
+  const room = state.room;
+  if (!room) return;
+  if (room.status !== 'catPick') { state.page = room.status; renderCurrentPage(); return; }
+  const cats = room.allCategories || state.categories || [];
+  const selected = room.selectedCategories ? Object.values(room.selectedCategories) : [];
+  const app = getApp();
+  app.innerHTML = `
+    <div class="h-full w-full flex items-center justify-center p-4">
+      <div class="fade-in text-center max-w-2xl w-full">
+        <h2 class="text-2xl font-black text-indigo-700 mb-2">📚 اختر ٦ تصنيفات</h2>
+        <p class="text-gray-400 text-sm mb-4">تم اختيار ${selected.length}/6</p>
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4 max-h-[60%] overflow-auto p-2">
+          ${cats.map(cat => {
+            const isSel = selected.includes(cat);
+            return `<button onclick="toggleCat('${cat.replace(/'/g, "\\'")}')"
+              class="p-4 rounded-xl border-2 transition card-hover ${isSel ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 bg-white hover:border-indigo-200'}">
+              <p class="font-bold text-sm ${isSel ? 'text-indigo-600' : 'text-gray-700'}">${cat}</p>
+              ${isSel ? '<span class="text-indigo-500 text-xs">✓ مختار</span>' : ''}
+            </button>`;
+          }).join('')}
+        </div>
+        ${state.isHost && selected.length === 6 ? `
+          <button onclick="startGame()" class="w-full py-3 bg-green-500 hover:bg-green-600 text-white rounded-xl font-bold text-lg transition">🎮 بدء اللعبة!</button>
+        ` : ''}
+      </div>
+    </div>`;
+}
+
+async function toggleCat(cat) {
+  const room = state.room;
+  const selected = room.selectedCategories ? Object.values(room.selectedCategories) : [];
+  if (selected.includes(cat)) {
+    const idx = selected.indexOf(cat);
+    selected.splice(idx, 1);
+  } else {
+    if (selected.length >= 6) return;
+    selected.push(cat);
+  }
+  await db.ref(`rooms/${state.roomId}/selectedCategories`).set(selected);
+}
+
+async function startGame() {
+  const room = state.room;
+  const selected = room.selectedCategories ? Object.values(room.selectedCategories) : [];
+  // Build game board
+  const board = {};
+  for (const cat of selected) {
+    board[cat] = { 200: 'open', 400: 'open', 600: 'open' };
+  }
+  const players = Object.values(room.players);
+  const turnOrder = players.map(p => p.id);
+  await db.ref(`rooms/${state.roomId}`).update({
+    status: 'game',
+    board,
+    turnIndex: 0,
+    turnOrder,
+    currentQ: null
+  });
+  state.page = 'game';
+}
+
+// ====== GAME BOARD ======
+function renderGame() {
+  if (isLettersMode()) {
+    renderLettersGame();
+    return;
+  }
+  const room = state.room;
+  if (!room) return;
+  if (room.status === 'question') { state.page = 'question'; renderQuestion(); return; }
+  if (room.status === 'result') { state.page = 'result'; renderResult(); return; }
+  if (room.status === 'noAnswer') { state.page = 'noAnswer'; renderNoAnswer(); return; }
+  if (room.status === 'winner') { state.page = 'winner'; renderWinner(); return; }
+  if (room.status !== 'game') { state.page = room.status; renderCurrentPage(); return; }
+
+  const players = room.players ? Object.values(room.players) : [];
+  const board = room.board || {};
+  const turnOrder = room.turnOrder || [];
+  const turnIdx = room.turnIndex || 0;
+  const currentTurn = turnOrder[turnIdx % turnOrder.length];
+  const turnPlayer = players.find(p => p.id === currentTurn);
+  const isMyTurn = currentTurn === state.playerId;
+  const cats = Object.keys(board);
+
+  const app = getApp();
+  app.innerHTML = `
+    <div class="h-full w-full flex flex-col p-3 overflow-auto">
+      <!-- Players bar -->
+      <div class="flex justify-center gap-3 mb-2 flex-wrap">
+        ${players.map(p => `
+          <div class="text-center px-4 py-2 rounded-xl" style="background:${p.color || '#e5e7eb'}22; border: 2px solid ${p.color || '#e5e7eb'}">
+            <span class="text-2xl">${p.emoji}</span>
+            <p class="text-xs font-bold" style="color:${p.color || '#333'}">${p.name}</p>
+            <p class="text-lg font-black" style="color:${p.color || '#333'}">${p.score || 0}</p>
+            ${renderPresenceBadge(p.id)}
+          </div>
+        `).join('')}
+      </div>
+      <!-- Chat button -->
+      <div class="flex justify-center mb-2">
+        <button onclick="toggleChat()" class="relative px-4 py-1.5 bg-white shadow rounded-full text-sm font-bold text-gray-600 hover:bg-gray-50 transition">
+          💬 الدردشة
+          ${state.unreadCount > 0 ? `<span class="chat-badge">${state.unreadCount}</span>` : ''}
+        </button>
+      </div>
+      <!-- Turn indicator -->
+      <div class="text-center mb-3">
+        <p class="text-xl font-black text-indigo-700">الدور على: ${turnPlayer?.emoji || ''} ${turnPlayer?.name || ''}</p>
+        ${isMyTurn ? '<p class="text-sm text-green-500 font-bold">اختر سؤالاً!</p>' : '<p class="text-sm text-gray-400">انتظر دورك...</p>'}
+      </div>
+      <!-- Category cards -->
+      <div class="grid grid-cols-3 gap-3 flex-1">
+        ${cats.map(cat => {
+          const catData = board[cat] || {};
+          return `<div class="bg-white rounded-xl shadow p-3 text-center">
+            <p class="font-bold text-sm text-indigo-700 mb-2 truncate">${cat}</p>
+            <div class="space-y-2">
+              ${[200, 400, 600].map(pts => {
+                const st = catData[pts] || 'open';
+                if (st === 'open') {
+                  return `<button onclick="${isMyTurn ? `selectQuestion('${cat.replace(/'/g, "\\'")}',${pts})` : ''}"
+                    class="w-full py-2 rounded-lg font-bold text-sm transition ${isMyTurn ? 'bg-gray-100 hover:bg-indigo-100 text-gray-700 cursor-pointer' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}">${pts}</button>`;
+                } else if (st === 'dark') {
+                  return `<button disabled class="w-full py-2 rounded-lg font-bold text-sm bg-gray-800 text-gray-500 cursor-not-allowed opacity-40">${pts}</button>`;
+                } else {
+                  // Colored by player
+                  return `<button disabled class="w-full py-2 rounded-lg font-bold text-sm text-white cursor-not-allowed" style="background:${st}">${pts}</button>`;
+                }
+              }).join('')}
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+    ${renderChatModal()}`;
+}
+
+async function selectQuestion(cat, pts) {
+  clearQuestionTimers();
+  clearStageTimeout();
+  state.evaluatingQuestionKey = '';
+  // Find a question
+  const snap = await db.ref('questions').orderByChild('category').equalTo(cat).once('value');
+  const all = snap.val() ? Object.entries(snap.val()).map(([id, q]) => ({ id, ...q })) : [];
+  const matching = all.filter(q => Number(q.points) === Number(pts));
+  if (matching.length === 0) { showToast('لا يوجد سؤال متاح'); return; }
+  const used = state.room?.usedQuestions ? Object.values(state.room.usedQuestions) : [];
+  let available = matching.filter(q => !used.includes(q.id));
+  if (available.length === 0) available = matching;
+  const q = available[Math.floor(Math.random() * available.length)];
+
+  await db.ref(`rooms/${state.roomId}`).update({
+    status: 'loading',
+    currentQ: { ...q, cat, pts, startTime: null, loadingAt: estimatedServerNow(), answerCounter: 0 },
+    answers: null,
+    answerTimes: null,
+    answerOrders: null
+  });
+  // Add to used
+  await db.ref(`rooms/${state.roomId}/usedQuestions`).push(q.id);
+
+  state.page = 'loading';
+}
+
+// ====== LOADING SCREEN ======
+function renderLoading() {
+  const room = state.room;
+  if (!room) return;
+  if (room.status === 'question') { state.page = 'question'; renderQuestion(); return; }
+  if (!['loading', 'evaluating'].includes(room.status)) { state.page = room.status; renderCurrentPage(); return; }
+  const q = room.currentQ;
+  if (!q) return;
+  const isEvaluating = room.status === 'evaluating';
+  if (!isEvaluating) {
+    const loadingElapsed = q.loadingAt ? (estimatedServerNow() - q.loadingAt) : 2500;
+    scheduleQuestionReveal(getQuestionRoundKey(q), 2500 - loadingElapsed);
+  } else {
+    const evaluatingElapsed = q.evaluatingAt ? (estimatedServerNow() - q.evaluatingAt) : 1600;
+    scheduleAnswerAnalysis(getQuestionRoundKey(q), 1600 - evaluatingElapsed);
+  }
+  const app = getApp();
+  app.innerHTML = `
+    <div class="h-full w-full flex items-center justify-center p-4">
+      <div class="fade-in text-center">
+        <div class="text-5xl mb-4 animate-bounce">⏳</div>
+        <p class="text-xl font-bold text-indigo-700 mb-2">${q?.cat || ''}</p>
+        <p class="text-3xl font-black text-amber-500 mb-4">${q?.pts || ''} نقطة</p>
+        <p class="text-gray-400">${isEvaluating ? 'جاري تحليل الإجابات...' : 'جاري تحميل السؤال...'}</p>
+        <div class="mt-4 w-48 h-2 bg-gray-200 rounded-full mx-auto overflow-hidden">
+          <div class="h-full bg-indigo-500 rounded-full animate-pulse" style="width:70%"></div>
+        </div>
+      </div>
+    </div>`;
+}
+
+// ====== QUESTION ======
+function renderQuestion() {
+  const room = state.room;
+  if (!room) return;
+  if (room.status === 'result') { state.page = 'result'; renderResult(); return; }
+  if (room.status === 'noAnswer') { state.page = 'noAnswer'; renderNoAnswer(); return; }
+  if (room.status === 'game') { state.page = 'game'; renderGame(); return; }
+  if (room.status !== 'question') { state.page = room.status; renderCurrentPage(); return; }
+
+  const q = room.currentQ;
+  if (!q) return;
+  clearStageTimeout();
+  const answers = room.answers || {};
+  const answerOrders = room.answerOrders || {};
+  const myAnswer = getAnswerChoice(answers[state.playerId]);
+  const players = room.players ? Object.values(room.players) : [];
+  const allAnswered = players.every(p => !!getAnswerChoice(answers[p.id]));
+  // Parse options
+  const options = parseOptions(q.options);
+  const optionVotes = Object.fromEntries(options.map(opt => [
+    opt,
+    players
+      .filter(p => getAnswerChoice(answers[p.id]) === opt)
+      .sort((a, b) => Number(answerOrders[a.id] || Number.MAX_SAFE_INTEGER) - Number(answerOrders[b.id] || Number.MAX_SAFE_INTEGER))
+  ]));
+
+  // Timer
+  const elapsed = q.startTime ? Math.floor((estimatedServerNow() - q.startTime) / 1000) : 0;
+  const remaining = Math.max(0, 40 - elapsed);
+
+  const app = getApp();
+  app.innerHTML = `
+    <div class="h-full w-full flex items-center justify-center p-4">
+      <div class="fade-in text-center max-w-lg w-full">
+        <div class="mb-3">
+          <span class="px-3 py-1 bg-indigo-100 text-indigo-600 rounded-full text-sm font-bold">${q.cat}</span>
+          <span class="px-3 py-1 bg-amber-100 text-amber-600 rounded-full text-sm font-bold mr-2">${q.pts} نقطة</span>
+        </div>
+        <div class="bg-white rounded-2xl shadow-lg p-6 mb-4">
+          <h3 class="text-xl font-black text-gray-800 mb-4">${q.question}</h3>
+          <div class="text-center mb-3">
+            <span class="text-3xl font-black ${remaining <= 10 ? 'text-red-500' : 'text-indigo-600'}" id="timerDisplay">${remaining}</span>
+            <span class="text-sm text-gray-400"> ثانية</span>
+          </div>
+          <div class="space-y-3">
+            ${options.map((opt, i) => {
+              const letter = ['أ', 'ب', 'ج', 'د'][i];
+              const isSelected = myAnswer === opt;
+              const voters = optionVotes[opt] || [];
+              return `<button onclick="${myAnswer ? '' : `submitAnswer('${opt.replace(/'/g, "\\'")}')`}"
+                class="w-full p-3 rounded-xl border-2 text-right font-bold transition ${isSelected ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : myAnswer ? 'border-gray-100 bg-gray-50 text-gray-400' : 'border-gray-200 bg-white hover:border-indigo-300 text-gray-700'}"
+                ${myAnswer ? 'disabled' : ''}>
+                <div class="flex items-start gap-2">
+                  <span class="inline-block w-6 h-6 rounded-full bg-indigo-100 text-indigo-600 text-xs leading-6 text-center shrink-0">${letter}</span>
+                  <div class="flex-1">
+                    <div>${opt}</div>
+                    ${voters.length ? `
+                      <div class="flex flex-wrap gap-1 mt-2">
+                        ${voters.map(voter => `
+                          <span class="px-2 py-0.5 rounded-full text-[11px] font-black" style="background:${voter.color || '#64748b'};color:${getContrastTextColor(voter.color || '#64748b')}">
+                            ${voter.name}
+                          </span>
+                        `).join('')}
+                      </div>
+                    ` : ''}
+                  </div>
+                </div>
+              </button>`;
+            }).join('')}
+          </div>
+        </div>
+        ${myAnswer ? '<p class="text-green-500 font-bold text-sm">✓ تم إرسال إجابتك</p>' : ''}
+        <p class="text-gray-400 text-xs">أجاب ${Object.keys(answers).length}/${players.length}</p>
+      </div>
+    </div>`;
+
+  // Timer countdown
+  clearInterval(state.timer);
+  if (remaining <= 0) {
+    clearTimeout(state.answerEvalTimeout);
+    evaluateAnswers(getQuestionRoundKey(q));
+  } else if (!allAnswered) {
+    clearTimeout(state.answerEvalTimeout);
+    state.answerEvalTimeout = null;
+    state.timer = setInterval(async () => {
+      const el = document.getElementById('timerDisplay');
+      if (!el) { clearInterval(state.timer); return; }
+      const now = estimatedServerNow();
+      const r = Math.max(0, 40 - Math.floor((now - q.startTime) / 1000));
+      el.textContent = r;
+      if (r <= 10) el.className = 'text-3xl font-black text-red-500';
+      if (r <= 0) {
+        clearInterval(state.timer);
+        evaluateAnswers(getQuestionRoundKey(q));
+      }
+    }, 1000);
+  }
+  // Check if all answered
+  if (allAnswered) {
+    clearInterval(state.timer);
+    clearTimeout(state.answerEvalTimeout);
+    state.answerEvalTimeout = setTimeout(() => evaluateAnswers(getQuestionRoundKey(q)), 250);
+  }
+}
+
+function parseOptions(optStr) {
+  if (!optStr) return [];
+  // Try splitting by common patterns
+  const cleaned = optStr.replace(/[أبجد]\)/g, '|').replace(/[أبجد]\./g, '|');
+  let parts = cleaned.split('|').map(s => s.trim()).filter(Boolean);
+  if (parts.length >= 2) return parts;
+  parts = optStr.split(/\s{2,}/).map(s => s.trim()).filter(Boolean);
+  if (parts.length >= 2) return parts;
+  return optStr.split(',').map(s => s.trim()).filter(Boolean);
+}
+
+async function submitAnswer(ans) {
+  const roomRef = db.ref(`rooms/${state.roomId}`);
+  const tx = await roomRef.transaction(room => {
+    if (!room || room.status !== 'question' || !room.currentQ || !state.playerId) return room;
+    room.answers = room.answers || {};
+    if (getAnswerChoice(room.answers[state.playerId])) return room;
+    room.answerTimes = room.answerTimes || {};
+    room.answerOrders = room.answerOrders || {};
+    const nextOrder = Number(room.currentQ.answerCounter || 0) + 1;
+    const submittedAt = estimatedServerNow();
+    room.currentQ.answerCounter = nextOrder;
+    room.answers[state.playerId] = {
+      choice: ans,
+      submittedAt
+    };
+    room.answerOrders[state.playerId] = nextOrder;
+    room.answerTimes[state.playerId] = submittedAt;
+
+    const totalPlayers = Object.keys(room.players || {}).length;
+    const totalAnswers = Object.values(room.answers || {}).filter(entry => !!getAnswerChoice(entry)).length;
+    if (totalPlayers > 0 && totalAnswers >= totalPlayers) {
+      room.status = 'evaluating';
+      room.currentQ.evaluatingAt = estimatedServerNow();
+    }
+    return room;
+  });
+  if (!tx.committed) showToast('تعذر إرسال الإجابة، حاول مرة أخرى');
+}
+
+async function evaluateAnswers(expectedQuestionKey = '') {
+  clearTimeout(state.answerEvalTimeout);
+  await db.ref(`rooms/${state.roomId}`).transaction(room => {
+    if (!room || room.status !== 'question' || !room.currentQ) return room;
+    const currentQuestionKey = getQuestionRoundKey(room.currentQ);
+    if (expectedQuestionKey && expectedQuestionKey !== currentQuestionKey) return room;
+    const answers = room.answers || {};
+    const players = room.players ? Object.values(room.players) : [];
+    const allAnswered = players.length > 0 && players.every(player => !!getAnswerChoice(answers[player.id]));
+    const elapsedMs = room.currentQ.startTime ? (estimatedServerNow() - room.currentQ.startTime) : 0;
+    if (!allAnswered && elapsedMs < 40000) return room;
+    room.status = 'evaluating';
+    room.currentQ.evaluatingAt = estimatedServerNow();
+    return room;
+  });
+}
+
+async function finalizeAnswerAnalysis(expectedQuestionKey = '') {
+  await db.ref(`rooms/${state.roomId}`).transaction(room => {
+    if (!room || room.status !== 'evaluating' || !room.currentQ) return room;
+    const currentQuestionKey = getQuestionRoundKey(room.currentQ);
+    if (expectedQuestionKey && expectedQuestionKey !== currentQuestionKey) return room;
+
+    const q = room.currentQ;
+    const answers = room.answers || {};
+    const answerTimes = room.answerTimes || {};
+    const answerOrders = room.answerOrders || {};
+    const players = room.players ? Object.values(room.players) : [];
+    const correctAnswer = q.answer || '';
+    const ptsValue = Number(q.pts || q.points || 0);
+
+    const correctPlayers = players
+      .map(player => {
+        const answer = getAnswerChoice(answers[player.id]);
+        if (!answer || !isCorrectAnswer(answer, correctAnswer)) return null;
+        return {
+          ...player,
+          order: Number(answerOrders[player.id] || Number.MAX_SAFE_INTEGER),
+          time: Number(answerTimes[player.id] || Number.MAX_SAFE_INTEGER)
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => (a.order - b.order) || (a.time - b.time));
+
+    if (correctPlayers.length > 0) {
+      const fastest = correctPlayers[0];
+      room.players[fastest.id].score = Number(room.players[fastest.id].score || 0) + ptsValue;
+      room.board[q.cat][ptsValue] = fastest.color || '#22c55e';
+      room.status = 'result';
+      room.lastResult = { winner: fastest.name, emoji: fastest.emoji, pts: ptsValue, answer: correctAnswer };
+      return room;
+    }
+
+    room.board[q.cat][ptsValue] = 'dark';
+    room.status = 'noAnswer';
+    room.lastResult = { pts: ptsValue, answer: correctAnswer };
+    return room;
+  });
+}
+
+function isCorrectAnswer(given, correct) {
+  const normalize = s => s.replace(/[أبجد]\)/g, '').replace(/[()]/g, '').trim().toLowerCase();
+  return normalize(given) === normalize(correct) || given.includes(normalize(correct)) || normalize(correct).includes(normalize(given));
+}
+
+// ====== RESULT (correct) ======
+function renderResult() {
+  const room = state.room;
+  if (!room) return;
+  if (room.status === 'game') { state.page = 'game'; renderGame(); return; }
+  if (room.status !== 'result') { state.page = room.status; renderCurrentPage(); return; }
+  clearQuestionTimers();
+  state.evaluatingQuestionKey = '';
+  const r = room.lastResult || {};
+  const app = getApp();
+  app.innerHTML = `
+    <div class="h-full w-full flex items-center justify-center p-4" style="background: linear-gradient(135deg, #dcfce7, #bbf7d0)">
+      <div class="bounce-in text-center">
+        <div class="text-7xl mb-4">🎉</div>
+        <p class="text-sm text-green-600 font-bold mb-2">الجواب الصحيح: ${r.answer || ''}</p>
+        <p class="text-2xl font-black text-green-700 mb-2">أسرع إجابة صحيحة!</p>
+        <div class="text-5xl mb-2">${r.emoji || '😎'}</div>
+        <p class="text-3xl font-black text-green-800">${r.winner || ''}</p>
+        <p class="text-xl text-green-600 font-bold mt-2">+${r.pts || 0} نقطة</p>
+      </div>
+    </div>`;
+  clearStageTimeout();
+  state.stageTimeout = setTimeout(() => proceedToNext('result'), 3500);
+}
+
+// ====== NO ANSWER ======
+function renderNoAnswer() {
+  const room = state.room;
+  if (!room) return;
+  if (room.status === 'game') { state.page = 'game'; renderGame(); return; }
+  if (room.status !== 'noAnswer') { state.page = room.status; renderCurrentPage(); return; }
+  clearQuestionTimers();
+  state.evaluatingQuestionKey = '';
+  const r = room.lastResult || {};
+  const app = getApp();
+  app.innerHTML = `
+    <div class="h-full w-full flex items-center justify-center p-4" style="background: linear-gradient(135deg, #fef2f2, #fecaca)">
+      <div class="bounce-in text-center">
+        <div class="text-7xl mb-4">😢</div>
+	        <p class="text-sm text-red-500 font-bold mb-2">الجواب الصحيح: ${r.answer || ''}</p>
+	        <p class="text-2xl font-black text-red-700">لم يجب أحد بشكل صحيح!</p>
+	      </div>
+	    </div>`;
+  clearStageTimeout();
+  state.stageTimeout = setTimeout(() => proceedToNext('noAnswer'), 3000);
+}
+
+async function proceedToNext(expectedStatus = '') {
+  await db.ref(`rooms/${state.roomId}`).transaction(room => {
+    if (!room || !['result', 'noAnswer'].includes(room.status)) return room;
+    if (expectedStatus && room.status !== expectedStatus) return room;
+    const board = room.board || {};
+    let allDone = true;
+    for (const cat of Object.keys(board)) {
+      for (const pts of [200, 400, 600]) {
+        if (board[cat]?.[pts] === 'open') {
+          allDone = false;
+          break;
+        }
+      }
+      if (!allDone) break;
+    }
+    if (allDone) {
+      room.status = 'winner';
+      room.currentQ = null;
+      room.answers = null;
+      room.answerTimes = null;
+      room.answerOrders = null;
+      return room;
+    }
+    const turnOrder = room.turnOrder || [];
+    if (!turnOrder.length) return room;
+    room.status = 'game';
+    room.turnIndex = ((room.turnIndex || 0) + 1) % turnOrder.length;
+    room.currentQ = null;
+    room.answers = null;
+    room.answerTimes = null;
+    room.answerOrders = null;
+    return room;
+  });
+}
+
+// ====== WINNER ======
+function renderInlineChatPanel() {
+  const msgs = state.chatMessages || [];
+  return `
+    <div class="bg-white/95 rounded-t-2xl rounded-b-none shadow-xl border border-slate-200 overflow-hidden">
+      <div class="flex items-center justify-between p-4 border-b border-slate-100">
+        <h3 class="font-black text-lg text-slate-800">💬 المحادثة</h3>
+        <span class="text-xs text-slate-400">${msgs.length} رسالة</span>
+      </div>
+      <div class="h-72 overflow-auto p-4 space-y-2" id="winnerChatMessages">
+        ${msgs.length === 0 ? '<p class="text-gray-400 text-sm text-center py-8">ابدأوا الحديث بعد انتهاء اللعبة</p>' : ''}
+        ${msgs.map(m => `
+          <div class="text-sm ${m.senderId === state.playerId ? 'text-left' : 'text-right'}">
+            <span class="font-bold text-indigo-600">${m.senderName}</span>
+            <p class="bg-gray-100 inline-block px-3 py-1 rounded-lg mt-0.5">${m.text}</p>
+          </div>
+        `).join('')}
+      </div>
+      <form onsubmit="sendChat(event, 'chatInput')" class="p-3 border-t border-slate-100 flex gap-2">
+        <input id="chatInput" value="${escapeHtml(state.chatDraft)}" oninput="rememberChatDraft(this.value)" type="text" placeholder="اكتب رسالة..." class="flex-1 px-3 py-2 border rounded-lg outline-none focus:border-indigo-400" maxlength="200">
+        <button type="submit" class="px-4 py-2 bg-indigo-500 text-white rounded-lg font-bold hover:bg-indigo-600 transition">إرسال</button>
+      </form>
+    </div>`;
+}
+
+function renderWinner() {
+  if (isLettersMode()) {
+    renderLettersWinner();
+    return;
+  }
+  const room = state.room;
+  if (!room) return;
+  if (room.status !== 'winner') {
+    state.page = room.status || 'lobby';
+    renderCurrentPage();
+    return;
+  }
+  state.chatOpen = false;
+  const players = room.players ? Object.values(room.players) : [];
+  players.sort((a, b) => (b.score || 0) - (a.score || 0));
+  const winner = players[0];
+  const losers = players.slice(1);
+
+  let confettiHtml = '';
+  for (let i = 0; i < 30; i++) {
+    const colors = ['#ef4444', '#3b82f6', '#22c55e', '#eab308', '#a855f7', '#f97316'];
+    const c = colors[Math.floor(Math.random() * colors.length)];
+    const left = Math.random() * 100;
+    const delay = Math.random() * 2;
+    const size = 8 + Math.random() * 8;
+    confettiHtml += `<div class="confetti-piece" style="left:${left}%;animation-delay:${delay}s;width:${size}px;height:${size}px;background:${c};border-radius:${Math.random()>0.5?'50%':'2px'}"></div>`;
+  }
+
+  const app = getApp();
+  app.innerHTML = `
+    <div class="h-full w-full overflow-auto px-4 pt-4 pb-0" style="background: linear-gradient(135deg, #fef9c3, #fde68a)">
+      ${confettiHtml}
+      <div class="max-w-3xl mx-auto min-h-full flex flex-col gap-4">
+        <div class="bounce-in text-center bg-white/85 rounded-3xl p-6 shadow-2xl">
+          <div class="text-6xl mb-2">👑</div>
+          <div class="text-6xl mb-2">${winner?.emoji || '😎'}</div>
+          <h2 class="text-4xl font-black text-amber-700 mb-1">${winner?.name || ''}</h2>
+          <p class="text-2xl font-bold text-amber-600 mb-4">${winner?.score || 0} نقطة</p>
+          <p class="text-gray-500 font-bold mb-2">🏆 الفائز!</p>
+          <div class="mt-4 space-y-1">
+            ${losers.map(p => `
+              <p class="text-red-500 font-bold">${p.emoji} ${p.name}: ${p.score || 0} نقطة</p>
+            `).join('')}
+          </div>
+          ${state.isHost ? `
+            <button onclick="newGame()" class="mt-6 px-8 py-3 bg-indigo-500 hover:bg-indigo-600 text-white rounded-xl font-bold text-lg transition">🔄 لعبة جديدة</button>
+          ` : `
+            <p class="mt-6 text-sm font-bold text-slate-500">بانتظار المضيف لبدء لعبة جديدة</p>
+          `}
+        </div>
+        <div class="mt-auto">
+          ${renderInlineChatPanel()}
+        </div>
+      </div>
+    </div>`;
+}
+
+async function newGame() {
+  if (isLettersMode()) {
+    await restartLettersRoom();
+    return;
+  }
+  const room = state.room;
+  if (!room || !state.isHost) return;
+  clearQuestionTimers();
+  clearStageTimeout();
+  state.evaluatingQuestionKey = '';
+
+  const nextPlayers = {};
+  Object.values(room.players || {}).forEach(player => {
+    nextPlayers[player.id] = {
+      ...player,
+      score: 0,
+      color: '',
+      ready: false
+    };
+  });
+
+  await db.ref(`rooms/${state.roomId}`).update({
+    status: 'lobby',
+    players: nextPlayers,
+    board: null,
+    turnOrder: null,
+    turnIndex: 0,
+    currentQ: null,
+    answers: null,
+    answerTimes: null,
+    answerOrders: null,
+    selectedCategories: null,
+    allCategories: null,
+    usedQuestions: null,
+    lastResult: null
+  });
+  state.page = 'lobby';
+  renderCurrentPage();
+}
+
+// ====== CHAT ======
+function toggleChat() {
+  state.chatOpen = !state.chatOpen;
+  if (state.chatOpen) state.unreadCount = 0;
+  renderCurrentPage();
+}
+
+function renderChatModal() {
+  if (!state.chatOpen) return '';
+  const msgs = state.chatMessages || [];
+  return `
+    <div class="fixed inset-0 bg-black/40 z-50 flex items-end justify-center p-4" onclick="if(event.target===this)toggleChat()">
+      <div class="bg-white rounded-t-2xl w-full max-w-md max-h-[70%] flex flex-col shadow-2xl fade-in" onclick="event.stopPropagation()">
+        <div class="flex items-center justify-between p-4 border-b">
+          <h3 class="font-bold text-lg">💬 الدردشة</h3>
+          <button onclick="toggleChat()" class="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+        </div>
+        <div class="flex-1 overflow-auto p-4 space-y-2" id="chatMessages">
+          ${msgs.length === 0 ? '<p class="text-gray-400 text-sm text-center">لا توجد رسائل بعد</p>' : ''}
+          ${msgs.map(m => `
+            <div class="text-sm ${m.senderId === state.playerId ? 'text-left' : 'text-right'}">
+              <span class="font-bold text-indigo-600">${m.senderName}</span>
+              <p class="bg-gray-100 inline-block px-3 py-1 rounded-lg mt-0.5">${m.text}</p>
+            </div>
+          `).join('')}
+        </div>
+        <form onsubmit="sendChat(event, 'chatInput')" class="p-3 border-t flex gap-2">
+          <input id="chatInput" value="${escapeHtml(state.chatDraft)}" oninput="rememberChatDraft(this.value)" type="text" placeholder="اكتب رسالة..." class="flex-1 px-3 py-2 border rounded-lg outline-none focus:border-indigo-400" maxlength="200">
+          <button type="submit" class="px-4 py-2 bg-indigo-500 text-white rounded-lg font-bold hover:bg-indigo-600 transition">إرسال</button>
+        </form>
+      </div>
+    </div>`;
+}
+
+async function sendChat(e, inputId = 'chatInput') {
+  e.preventDefault();
+  const input = document.getElementById(inputId);
+  const text = input.value.trim();
+  if (!text) return;
+  const me = state.room?.players?.[state.playerId] || null;
+  state.chatDraft = '';
+  input.value = '';
+  try {
+    await getGameRoomRef().child('chat').push({
+      senderId: state.playerId,
+      senderName: state.playerName,
+      senderRole: me?.role || 'player',
+      senderTeam: me?.team || '',
+      text,
+      time: Date.now()
+    });
+    scrollMessagesToBottom(isLettersMode() && state.page === 'game' ? 'lettersGameChatMessages' : state.page === 'winner' ? 'winnerChatMessages' : 'chatMessages');
+    input.focus();
+  } catch (error) {
+    state.chatDraft = text;
+    input.value = text;
+    input.focus();
+    showToast('تعذر إرسال الرسالة');
+  }
+}
+
+// ====== ADMIN ======
+async function goAdmin() {
+  await loadQuestionsFromFirebase();
+  state.page = 'admin';
+  renderCurrentPage();
+}
+
+function renderLettersAdmin() {
+  const app = getApp();
+  app.innerHTML = `
+    <div class="h-full w-full overflow-auto p-4">
+      <div class="max-w-4xl mx-auto fade-in">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-2xl font-black text-emerald-700">🔐 إدارة ميدان الحروف</h2>
+          <button onclick="exitAdmin()" class="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg font-bold text-sm transition">🚪 خروج</button>
+        </div>
+        <div class="bg-white rounded-xl shadow p-5 mb-4">
+          <h3 class="font-bold text-lg mb-3">📤 رفع ملف Excel</h3>
+          <p class="text-xs text-gray-400 mb-2">التنسيق: الحرف / السؤال / الجواب</p>
+          <div class="flex flex-wrap gap-2 mb-3">
+            <button onclick="downloadLettersTemplate()" class="px-4 py-2 bg-emerald-100 text-emerald-700 rounded-lg font-black text-sm hover:bg-emerald-200 transition">⬇️ تحميل نموذج Excel</button>
+          </div>
+          <input type="file" accept=".xlsx,.xls,.csv" onchange="handleLettersFileUpload(event)" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-emerald-50 file:text-emerald-600 file:font-bold hover:file:bg-emerald-100">
+          <div id="uploadProgress" class="hidden mt-3">
+            <div class="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+              <div id="uploadBar" class="h-full bg-emerald-500 rounded-full transition-all" style="width:0%"></div>
+            </div>
+            <p class="text-sm text-gray-500 mt-1" id="uploadStatus">جاري التحميل...</p>
+          </div>
+        </div>
+        <div class="bg-white rounded-xl shadow p-5 mb-4">
+          <h3 class="font-bold text-lg mb-3">🔤 الحروف (${state.categories.length})</h3>
+          <div class="flex flex-wrap gap-2">
+            ${state.categories.map(letter => `
+              <div class="flex items-center gap-1 px-3 py-1.5 bg-emerald-50 rounded-full">
+                <span class="text-sm font-bold text-emerald-700">${letter}</span>
+                <button onclick="deleteLettersLetter('${letter.replace(/'/g, "\\'")}')" class="text-red-400 hover:text-red-600 text-xs ml-1">✕</button>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+        <div class="bg-white rounded-xl shadow p-5">
+          <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+            <h3 class="font-bold text-lg">❓ أسئلة الحروف (${state.questions.length})</h3>
+            <div class="flex gap-2">
+              <select onchange="state.adminFilter=this.value;renderAdmin()" class="px-3 py-1.5 border rounded-lg text-sm outline-none">
+                <option value="">كل الحروف</option>
+                ${state.categories.map(letter => `<option value="${letter}" ${state.adminFilter === letter ? 'selected' : ''}>${letter}</option>`).join('')}
+              </select>
+              <input type="text" placeholder="بحث..." value="${state.adminSearch || ''}" oninput="state.adminSearch=this.value;renderAdmin()" class="px-3 py-1.5 border rounded-lg text-sm outline-none w-36">
+            </div>
+          </div>
+          <div class="space-y-2 max-h-96 overflow-auto">
+            ${getFilteredLettersQuestions().map(q => `
+              <div class="flex items-start justify-between p-3 bg-gray-50 rounded-lg">
+                <div class="flex-1">
+                  <span class="text-xs px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full">${q.letter}</span>
+                  <p class="text-sm font-bold mt-1">${q.question}</p>
+                  <p class="text-xs text-green-600 mt-1">✓ ${q.answer}</p>
+                </div>
+                <div class="flex gap-1 mr-2">
+                  <button onclick="editLettersQuestion('${q.id}')" class="px-2 py-1 text-xs bg-blue-100 text-blue-600 rounded hover:bg-blue-200">تعديل</button>
+                  <button onclick="deleteLettersQuestion('${q.id}')" class="px-2 py-1 text-xs bg-red-100 text-red-600 rounded hover:bg-red-200">حذف</button>
+                </div>
+              </div>
+            `).join('')}
+            ${getFilteredLettersQuestions().length === 0 ? '<p class="text-gray-400 text-sm text-center py-4">لا توجد أسئلة</p>' : ''}
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="editModal" class="hidden fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"></div>`;
+}
+
+function getFilteredLettersQuestions() {
+  let qs = state.questions;
+  if (state.adminFilter) qs = qs.filter(q => q.letter === state.adminFilter);
+  if (state.adminSearch) qs = qs.filter(q => q.question.includes(state.adminSearch));
+  return qs;
+}
+
+function downloadLettersTemplate() {
+  const sheet = XLSX.utils.aoa_to_sheet([
+    ['الحرف', 'السؤال', 'الجواب'],
+    ['أ', 'اسم حيوان يبدأ بحرف أ؟', 'أرنب'],
+    ['ب', 'مدينة تبدأ بحرف ب؟', 'بيروت']
+  ]);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, 'الحروف');
+  XLSX.writeFile(workbook, 'letters-template.xlsx');
+}
+
+async function handleLettersFileUpload(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  document.getElementById('uploadProgress').classList.remove('hidden');
+  const bar = document.getElementById('uploadBar');
+  const status = document.getElementById('uploadStatus');
+  const reader = new FileReader();
+  reader.onload = async function(ev) {
+    const workbook = XLSX.read(ev.target.result, { type: 'binary' });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+    const dataRows = rows.slice(1).filter(r => r.length >= 2);
+    const total = dataRows.length;
+    const lettersSet = new Set();
+    let count = 0;
+    for (const row of dataRows) {
+      const letter = normalizeLettersLetter(row[0]);
+      const question = (row[1] || '').toString().trim();
+      const answer = (row[2] || '').toString().trim();
+      if (!letter || !question) continue;
+      lettersSet.add(letter);
+      count++;
+      const pct = total ? Math.round((count / total) * 100) : 100;
+      bar.style.width = pct + '%';
+      status.textContent = `جاري التحميل... ${count}/${total} سؤال | ${lettersSet.size} حرف`;
+      await db.ref('letterQuestions').push({ letter, question, answer });
+      await new Promise(r => setTimeout(r, 20));
+    }
+    status.textContent = `✅ تم رفع ${count} سؤال في ${lettersSet.size} حرف`;
+    bar.style.width = '100%';
+    await loadQuestionsFromFirebase();
+    setTimeout(() => renderAdmin(), 800);
+  };
+  reader.readAsBinaryString(file);
+}
+
+async function deleteLettersQuestion(id) {
+  await db.ref('letterQuestions/' + id).remove();
+  await loadQuestionsFromFirebase();
+  renderAdmin();
+}
+
+async function deleteLettersLetter(letter) {
+  const qs = state.questions.filter(q => q.letter === letter);
+  const updates = {};
+  qs.forEach(q => { updates[q.id] = null; });
+  await db.ref('letterQuestions').update(updates);
+  await loadQuestionsFromFirebase();
+  renderAdmin();
+}
+
+function editLettersQuestion(id) {
+  const q = state.questions.find(x => x.id === id);
+  if (!q) return;
+  const modal = document.getElementById('editModal');
+  modal.classList.remove('hidden');
+  modal.innerHTML = `
+    <div class="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl fade-in" onclick="event.stopPropagation()">
+      <h3 class="text-lg font-bold mb-4">✏️ تعديل سؤال الحرف</h3>
+      <div class="space-y-3">
+        <div><label class="text-sm text-gray-500">الحرف</label><input id="eqLetter" value="${q.letter}" class="w-full px-3 py-2 border rounded-lg outline-none"></div>
+        <div><label class="text-sm text-gray-500">السؤال</label><input id="eqQ" value="${q.question}" class="w-full px-3 py-2 border rounded-lg outline-none"></div>
+        <div><label class="text-sm text-gray-500">الجواب</label><input id="eqAns" value="${q.answer || ''}" class="w-full px-3 py-2 border rounded-lg outline-none"></div>
+      </div>
+      <div class="flex gap-2 mt-4">
+        <button onclick="saveLettersEditQ('${id}')" class="flex-1 py-2 bg-emerald-500 text-white rounded-lg font-bold hover:bg-emerald-600">حفظ</button>
+        <button onclick="document.getElementById('editModal').classList.add('hidden')" class="flex-1 py-2 bg-gray-200 rounded-lg font-bold hover:bg-gray-300">إلغاء</button>
+      </div>
+    </div>`;
+  modal.onclick = () => modal.classList.add('hidden');
+}
+
+async function saveLettersEditQ(id) {
+  const letter = normalizeLettersLetter(document.getElementById('eqLetter').value);
+  if (!letter) {
+    showToast('اكتب حرفًا صحيحًا');
+    return;
+  }
+  await db.ref('letterQuestions/' + id).update({
+    letter,
+    question: document.getElementById('eqQ').value.trim(),
+    answer: document.getElementById('eqAns').value.trim()
+  });
+  document.getElementById('editModal').classList.add('hidden');
+  await loadQuestionsFromFirebase();
+  renderAdmin();
+}
+
+function renderAdmin() {
+  if (isLettersMode()) {
+    renderLettersAdmin();
+    return;
+  }
+  const app = getApp();
+  app.innerHTML = `
+    <div class="h-full w-full overflow-auto p-4">
+      <div class="max-w-4xl mx-auto fade-in">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-2xl font-black text-indigo-700">🔐 لوحة الإدارة</h2>
+          <button onclick="exitAdmin()" class="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg font-bold text-sm transition">🚪 خروج</button>
+        </div>
+        <!-- Upload -->
+        <div class="bg-white rounded-xl shadow p-5 mb-4">
+          <h3 class="font-bold text-lg mb-3">📤 رفع ملف Excel</h3>
+          <p class="text-xs text-gray-400 mb-2">التنسيق: التصنيف / السؤال / الخيارات / الإجابة الصحيحة / النقاط</p>
+          <input type="file" accept=".xlsx,.xls,.csv" onchange="handleFileUpload(event)" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-indigo-50 file:text-indigo-600 file:font-bold hover:file:bg-indigo-100">
+          <div id="uploadProgress" class="hidden mt-3">
+            <div class="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+              <div id="uploadBar" class="h-full bg-indigo-500 rounded-full transition-all" style="width:0%"></div>
+            </div>
+            <p class="text-sm text-gray-500 mt-1" id="uploadStatus">جاري التحميل...</p>
+          </div>
+        </div>
+        <!-- Categories -->
+        <div class="bg-white rounded-xl shadow p-5 mb-4">
+          <h3 class="font-bold text-lg mb-3">📂 التصنيفات (${state.categories.length})</h3>
+          <div class="flex flex-wrap gap-2" id="catList">
+            ${state.categories.map(c => `
+              <div class="flex items-center gap-1 px-3 py-1.5 bg-indigo-50 rounded-full">
+                <span class="text-sm font-bold text-indigo-700">${c}</span>
+                <button onclick="deleteCategory('${c.replace(/'/g, "\\'")}')" class="text-red-400 hover:text-red-600 text-xs ml-1">✕</button>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+        <!-- Questions -->
+        <div class="bg-white rounded-xl shadow p-5">
+          <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+            <h3 class="font-bold text-lg">❓ الأسئلة (${state.questions.length})</h3>
+            <div class="flex gap-2">
+              <select onchange="state.adminFilter=this.value;renderAdmin()" class="px-3 py-1.5 border rounded-lg text-sm outline-none">
+                <option value="">كل التصنيفات</option>
+                ${state.categories.map(c => `<option value="${c}" ${state.adminFilter === c ? 'selected' : ''}>${c}</option>`).join('')}
+              </select>
+              <input type="text" placeholder="بحث..." value="${state.adminSearch || ''}" oninput="state.adminSearch=this.value;renderAdmin()" class="px-3 py-1.5 border rounded-lg text-sm outline-none w-36">
+            </div>
+          </div>
+          <div class="space-y-2 max-h-96 overflow-auto" id="qList">
+            ${getFilteredQuestions().map(q => `
+              <div class="flex items-start justify-between p-3 bg-gray-50 rounded-lg">
+                <div class="flex-1">
+                  <span class="text-xs px-2 py-0.5 bg-indigo-100 text-indigo-600 rounded-full">${q.category}</span>
+                  <span class="text-xs px-2 py-0.5 bg-amber-100 text-amber-600 rounded-full mr-1">${q.points} نقطة</span>
+                  <p class="text-sm font-bold mt-1">${q.question}</p>
+                  <p class="text-xs text-gray-400 mt-0.5">${q.options}</p>
+                  <p class="text-xs text-green-600">✓ ${q.answer}</p>
+                </div>
+                <div class="flex gap-1 mr-2">
+                  <button onclick="editQuestion('${q.id}')" class="px-2 py-1 text-xs bg-blue-100 text-blue-600 rounded hover:bg-blue-200">تعديل</button>
+                  <button onclick="deleteQuestion('${q.id}')" class="px-2 py-1 text-xs bg-red-100 text-red-600 rounded hover:bg-red-200">حذف</button>
+                </div>
+              </div>
+            `).join('')}
+            ${getFilteredQuestions().length === 0 ? '<p class="text-gray-400 text-sm text-center py-4">لا توجد أسئلة</p>' : ''}
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="editModal" class="hidden fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"></div>`;
+}
+
+function getFilteredQuestions() {
+  let qs = state.questions;
+  if (state.adminFilter) qs = qs.filter(q => q.category === state.adminFilter);
+  if (state.adminSearch) qs = qs.filter(q => q.question.includes(state.adminSearch));
+  return qs;
+}
+
+async function handleFileUpload(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  document.getElementById('uploadProgress').classList.remove('hidden');
+  const bar = document.getElementById('uploadBar');
+  const status = document.getElementById('uploadStatus');
+
+  const reader = new FileReader();
+  reader.onload = async function(ev) {
+    const workbook = XLSX.read(ev.target.result, { type: 'binary' });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+    const dataRows = rows.slice(1).filter(r => r.length >= 4);
+    const total = dataRows.length;
+    let catSet = new Set();
+    let count = 0;
+
+    for (const row of dataRows) {
+      const category = (row[0] || '').toString().trim();
+      const question = (row[1] || '').toString().trim();
+      const options = (row[2] || '').toString().trim();
+      const answer = (row[3] || '').toString().trim();
+      const points = parseInt(row[4]) || 200;
+      if (!question) continue;
+      catSet.add(category);
+      count++;
+      const pct = Math.round((count / total) * 100);
+      bar.style.width = pct + '%';
+      status.textContent = `جاري التحميل... ${count}/${total} سؤال | ${catSet.size} تصنيف`;
+      await db.ref('questions').push({ category, question, options, answer, points });
+      // Small delay for visual
+      await new Promise(r => setTimeout(r, 30));
+    }
+    status.textContent = `✅ تم رفع ${count} سؤال في ${catSet.size} تصنيف`;
+    bar.style.width = '100%';
+    await loadQuestionsFromFirebase();
+    setTimeout(() => renderAdmin(), 1000);
+  };
+  reader.readAsBinaryString(file);
+}
+
+async function deleteQuestion(id) {
+  await db.ref('questions/' + id).remove();
+  await loadQuestionsFromFirebase();
+  renderAdmin();
+}
+
+async function deleteCategory(cat) {
+  const qs = state.questions.filter(q => q.category === cat);
+  const updates = {};
+  qs.forEach(q => { updates[q.id] = null; });
+  await db.ref('questions').update(updates);
+  await loadQuestionsFromFirebase();
+  renderAdmin();
+}
+
+function editQuestion(id) {
+  const q = state.questions.find(x => x.id === id);
+  if (!q) return;
+  const modal = document.getElementById('editModal');
+  modal.classList.remove('hidden');
+  modal.innerHTML = `
+    <div class="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl fade-in" onclick="event.stopPropagation()">
+      <h3 class="text-lg font-bold mb-4">✏️ تعديل السؤال</h3>
+      <div class="space-y-3">
+        <div><label class="text-sm text-gray-500">التصنيف</label><input id="eqCat" value="${q.category}" class="w-full px-3 py-2 border rounded-lg outline-none"></div>
+        <div><label class="text-sm text-gray-500">السؤال</label><input id="eqQ" value="${q.question}" class="w-full px-3 py-2 border rounded-lg outline-none"></div>
+        <div><label class="text-sm text-gray-500">الخيارات</label><input id="eqOpt" value="${q.options}" class="w-full px-3 py-2 border rounded-lg outline-none"></div>
+        <div><label class="text-sm text-gray-500">الإجابة الصحيحة</label><input id="eqAns" value="${q.answer}" class="w-full px-3 py-2 border rounded-lg outline-none"></div>
+        <div><label class="text-sm text-gray-500">النقاط</label><input id="eqPts" type="number" value="${q.points}" class="w-full px-3 py-2 border rounded-lg outline-none"></div>
+      </div>
+      <div class="flex gap-2 mt-4">
+        <button onclick="saveEditQ('${id}')" class="flex-1 py-2 bg-indigo-500 text-white rounded-lg font-bold hover:bg-indigo-600">حفظ</button>
+        <button onclick="document.getElementById('editModal').classList.add('hidden')" class="flex-1 py-2 bg-gray-200 rounded-lg font-bold hover:bg-gray-300">إلغاء</button>
+      </div>
+    </div>`;
+  modal.onclick = () => modal.classList.add('hidden');
+}
+
+async function saveEditQ(id) {
+  await db.ref('questions/' + id).update({
+    category: document.getElementById('eqCat').value.trim(),
+    question: document.getElementById('eqQ').value.trim(),
+    options: document.getElementById('eqOpt').value.trim(),
+    answer: document.getElementById('eqAns').value.trim(),
+    points: parseInt(document.getElementById('eqPts').value) || 200
+  });
+  document.getElementById('editModal').classList.add('hidden');
+  await loadQuestionsFromFirebase();
+  renderAdmin();
+}
+
+function exitAdmin() { state.page = 'home'; renderCurrentPage(); }
+
+// Utils
+function shakeEl(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.animation = 'none';
+  el.offsetHeight;
+  el.classList.add('border-red-400');
+  el.style.animation = 'shake 0.4s ease';
+  setTimeout(() => el.classList.remove('border-red-400'), 1000);
+}
+
+function showToast(msg) {
+  const toast = document.createElement('div');
+  toast.className = 'fixed top-4 left-1/2 -translate-x-1/2 bg-gray-800 text-white px-5 py-2.5 rounded-xl font-bold text-sm z-[999] fade-in shadow-lg';
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 2500);
+}
+
+// Init
+(async () => {
+  firebase.database().ref('.info/serverTimeOffset').on('value', snap => {
+    state.serverTimeOffset = Number(snap.val() || 0);
+  });
+  const params = new URLSearchParams(window.location.search);
+  const hasDirectRoute = params.get('room') || params.get('game') || params.get('panel');
+  if (hasDirectRoute) {
+    checkUrlForRoom();
+    return;
+  }
+  await loadQuestionsFromFirebase();
+  const restored = await restoreRoomSession();
+  if (!restored) checkUrlForRoom();
+})();
+window.addEventListener('beforeunload', () => {
+  clearQuestionTimers();
+  clearStageTimeout();
+});
+</script></body>
+</html>
