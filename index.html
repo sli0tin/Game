@@ -330,8 +330,7 @@ function getLettersActiveLiveResult(room = state.room) {
 }
 function getLettersVisibleQuestion(room = state.room) {
   const question = room?.letters?.currentQuestion;
-  const visibleUntil = Number(room?.letters?.questionVisibleUntil || 0);
-  if (!question?.id || !room?.letters?.showQuestionInLive || visibleUntil <= estimatedServerNow()) return null;
+  if (!question?.id || !room?.letters?.showQuestionInLive) return null;
   return question;
 }
 function getLettersQuestionRemainingMs(room = state.room) {
@@ -348,10 +347,6 @@ function syncLettersTransientTimeout(room = state.room) {
   const result = getLettersActiveLiveResult(room);
   if (result) {
     remaining = LETTERS_LIVE_RESULT_DURATION - (estimatedServerNow() - Number(result.shownAt || 0));
-  }
-  const questionRemaining = getLettersQuestionRemainingMs(room);
-  if (questionRemaining) {
-    remaining = remaining ? Math.min(remaining, questionRemaining) : questionRemaining;
   }
   if (!remaining) return;
   state.lettersTransientTimeout = setTimeout(() => {
@@ -1784,7 +1779,7 @@ async function toggleLettersQuestionBroadcast(forceVisible = null) {
   const shouldShow = typeof forceVisible === 'boolean' ? forceVisible : !getLettersVisibleQuestion(room);
   await getLettersRoomRef().child('letters').update(shouldShow ? {
     showQuestionInLive: true,
-    questionVisibleUntil: estimatedServerNow() + 10000
+    questionVisibleUntil: 0
   } : {
     showQuestionInLive: false,
     questionVisibleUntil: 0
@@ -1844,14 +1839,12 @@ async function restartLettersRoom() {
   await getLettersRoomRef().update(updates);
 }
 
-function renderLettersBroadcastQuestionCard(room = state.room, compact = false, showTimer = false) {
-  const q = showTimer ? getLettersVisibleQuestion(room) : room?.letters?.currentQuestion;
+function renderLettersBroadcastQuestionCard(room = state.room, compact = false) {
+  const q = getLettersVisibleQuestion(room) || room?.letters?.currentQuestion;
   if (!q) return '';
-  const remainingSeconds = showTimer ? getLettersQuestionRemainingSeconds(room) : 0;
   return `
     <div class="mx-auto ${compact ? 'max-w-lg' : 'max-w-2xl'} bg-white rounded-[2rem] shadow-2xl border border-amber-100 p-5 md:p-7 text-center">
       <p class="text-sm font-black tracking-[0.25em] text-amber-500 mb-3">السؤال المعروض</p>
-      ${showTimer && remainingSeconds ? `<p class="text-xs font-black text-rose-500 mb-3">${remainingSeconds} ثوانٍ</p>` : ''}
       <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-amber-100 text-4xl font-black text-amber-600 mb-4">${q.letter || '؟'}</div>
       <p class="${compact ? 'text-xl leading-10' : 'text-3xl leading-[1.9]'} font-black text-slate-900">${q.question}</p>
     </div>`;
@@ -1898,12 +1891,31 @@ function renderLettersStageContent(room = state.room, compact = false) {
   const body = liveResult
     ? renderLettersLiveResultCard(room, compact)
     : visibleQuestion
-      ? renderLettersBroadcastQuestionCard(room, compact, true)
+      ? renderLettersBroadcastQuestionCard(room, compact)
       : `<div class="mx-auto ${compact ? 'max-w-[390px]' : 'max-w-[720px]'}">${renderLettersBoard(room, { interactive: false })}</div>`;
   return `
     <div class="relative">
       ${body}
       ${room?.status === 'winner' ? renderLettersWinnerSplash(room) : ''}
+    </div>`;
+}
+
+function renderLettersHostQuestionCard(room = state.room) {
+  const q = room?.letters?.currentQuestion;
+  if (!q) return '';
+  const shownInLive = !!getLettersVisibleQuestion(room);
+  return `
+    <div class="mx-auto max-w-lg bg-white rounded-[2rem] shadow-2xl border border-amber-100 p-5 md:p-7 text-center">
+      <p class="text-sm font-black tracking-[0.25em] text-amber-500 mb-3">السؤال المختار</p>
+      <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-amber-100 text-4xl font-black text-amber-600 mb-4">${q.letter || '؟'}</div>
+      <p class="text-xl leading-10 font-black text-slate-900">${q.question}</p>
+      <p class="mt-3 text-sm font-black text-emerald-700">الجواب: ${q.answer || 'غير محدد'}</p>
+      <div class="mt-4 flex flex-wrap justify-center gap-2">
+        <button onclick="changeLettersQuestion()" class="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-black hover:bg-slate-200 transition">سؤال آخر</button>
+        <button onclick="toggleLettersQuestionBroadcast(${shownInLive ? 'false' : 'true'})" class="px-4 py-2 rounded-xl bg-amber-500 text-white font-black hover:bg-amber-600 transition">${shownInLive ? 'إخفاء السؤال' : 'عرض السؤال'}</button>
+        <button onclick="toggleLettersAnswerPicker()" class="px-4 py-2 rounded-xl bg-emerald-600 text-white font-black hover:bg-emerald-700 transition">${state.lettersAnswerPickerOpen ? 'إخفاء الجواب' : 'جواب'}</button>
+        <button onclick="clearLettersSelection()" class="px-4 py-2 rounded-xl bg-slate-900 text-white font-black hover:bg-slate-800 transition">تغيير الحرف</button>
+      </div>
     </div>`;
 }
 
@@ -1933,37 +1945,25 @@ function renderLettersClaimPicker(room = state.room, canClaim = true) {
 
 function renderLettersHostGamePanel(room = state.room) {
   const q = room?.letters?.currentQuestion;
-  const activeQuestion = !!getLettersVisibleQuestion(room);
-  const remainingSeconds = getLettersQuestionRemainingSeconds(room);
   if (!q) {
     return `
       <div class="space-y-3">
         ${renderLettersBoard(room, { interactive: true })}
-        <p class="text-sm font-black text-slate-500 text-center">اختر حرفًا من الخلية لعرض سؤاله، أو اضغط على خلية ملوّنة لإزالة لونها.</p>
       </div>`;
   }
   return `
     <div class="space-y-4">
-      ${renderLettersBroadcastQuestionCard(room, true, activeQuestion)}
-      <div class="flex flex-wrap justify-center gap-2">
-        <button onclick="changeLettersQuestion()" class="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-black hover:bg-slate-200 transition">سؤال آخر</button>
-        <button onclick="toggleLettersQuestionBroadcast(true)" class="px-4 py-2 rounded-xl bg-amber-500 text-white font-black hover:bg-amber-600 transition">${activeQuestion ? `معروض الآن ${remainingSeconds}ث` : 'عرض السؤال'}</button>
-        <button onclick="clearLettersSelection()" class="px-4 py-2 rounded-xl bg-slate-900 text-white font-black hover:bg-slate-800 transition">تغيير الحرف</button>
-        <button onclick="toggleLettersAnswerPicker()" class="px-4 py-2 rounded-xl bg-emerald-600 text-white font-black hover:bg-emerald-700 transition">${state.lettersAnswerPickerOpen ? 'إخفاء الجواب' : 'جواب'}</button>
-      </div>
+      ${renderLettersHostQuestionCard(room)}
       ${state.lettersAnswerPickerOpen ? renderLettersClaimPicker(room, true) : ''}
     </div>`;
 }
 
 function renderLettersHostFooterActions(room = state.room) {
+  if (room.status !== 'winner') return '';
   return `
     <div class="bg-white rounded-[1.75rem] border border-slate-200 shadow-lg p-4 flex flex-wrap items-center justify-between gap-3">
-      ${room.status === 'winner' ? `
-        <p class="text-sm font-black text-slate-500">يمكنك إعادة اللعبة الآن بنفس الغرفة ونفس اللاعبين.</p>
-        <button onclick="restartLettersRoom()" class="px-4 py-2 rounded-xl bg-indigo-500 text-white text-sm font-black hover:bg-indigo-600 transition">إعادة اللعبة</button>
-      ` : `
-        <p class="text-sm font-black text-slate-500">الفوز يُحتسب تلقائيًا عند اكتمال مسار الأخضر من اليسار لليمين، أو الأحمر من الأعلى للأسفل.</p>
-      `}
+      <p class="text-sm font-black text-slate-500">يمكنك إعادة اللعبة الآن بنفس الغرفة ونفس اللاعبين.</p>
+      <button onclick="restartLettersRoom()" class="px-4 py-2 rounded-xl bg-indigo-500 text-white text-sm font-black hover:bg-indigo-600 transition">إعادة اللعبة</button>
     </div>`;
 }
 
@@ -1994,13 +1994,14 @@ function renderLettersGame() {
     return;
   }
   const app = getApp();
+  const hostFooter = state.isHost ? renderLettersHostFooterActions(room) : '';
   app.innerHTML = `
     <div class="min-h-full w-full p-4 md:p-6" style="background:linear-gradient(180deg,#f8fafc,#eef2ff)">
       <div class="max-w-4xl mx-auto space-y-4">
         <div class="max-w-3xl mx-auto bg-white/70 rounded-[2rem] border border-slate-200 shadow-xl p-3 md:p-4">
           ${state.isHost && room.status === 'game' ? renderLettersHostGamePanel(room) : renderLettersStageContent(room, true)}
         </div>
-        ${state.isHost ? `<div class="max-w-3xl mx-auto">${renderLettersHostFooterActions(room)}</div>` : ''}
+        ${hostFooter ? `<div class="max-w-3xl mx-auto">${hostFooter}</div>` : ''}
         ${renderLettersGameChatPanel()}
       </div>
     </div>`;
