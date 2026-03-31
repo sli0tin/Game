@@ -110,7 +110,9 @@ let state = {
   adminView: 'monitor',
   adminRooms: [],
   adminReturnMode: '',
-  spectatorMode: false
+  spectatorMode: false,
+  adminSelectedCategories: [],
+  adminSelectedLetters: []
 };
 
 const COLORS = [
@@ -3301,7 +3303,109 @@ function renderAdminMonitor() {
     </div>`;
 }
 
+function getAdminSelectionKey() {
+  return state.adminView === 'lettersQuestions' ? 'adminSelectedLetters' : 'adminSelectedCategories';
+}
+
+function getAdminSelectableItems() {
+  return [...(state.categories || [])];
+}
+
+function getAdminSelectedItems() {
+  const key = getAdminSelectionKey();
+  return Array.isArray(state[key]) ? state[key] : [];
+}
+
+function syncAdminSelections() {
+  const allowed = new Set(getAdminSelectableItems());
+  const key = getAdminSelectionKey();
+  state[key] = getAdminSelectedItems().filter(item => allowed.has(item));
+}
+
+function setAdminSelectedItems(items = []) {
+  const key = getAdminSelectionKey();
+  const allowed = new Set(getAdminSelectableItems());
+  state[key] = [...new Set(items)].filter(item => allowed.has(item));
+}
+
+function toggleAdminCategorySelection(value) {
+  const selected = new Set(getAdminSelectedItems());
+  if (selected.has(value)) {
+    selected.delete(value);
+  } else {
+    selected.add(value);
+  }
+  setAdminSelectedItems([...selected]);
+  renderAdmin();
+}
+
+function selectAllAdminCategories() {
+  setAdminSelectedItems(getAdminSelectableItems());
+  renderAdmin();
+}
+
+function clearAdminCategorySelection(shouldRender = true) {
+  setAdminSelectedItems([]);
+  if (shouldRender) renderAdmin();
+}
+
+async function deleteSelectedAdminCategories() {
+  const selected = getAdminSelectedItems();
+  if (!selected.length) {
+    showToast('حدد تصنيفًا واحدًا على الأقل');
+    return;
+  }
+  const targetLabel = state.adminView === 'lettersQuestions' ? 'الحروف' : 'التصنيفات';
+  if (!window.confirm(`هل تريد حذف ${selected.length} من ${targetLabel} مع كل الأسئلة التابعة لها؟`)) return;
+  const updates = {};
+  if (state.adminView === 'lettersQuestions') {
+    state.questions
+      .filter(q => selected.includes(q.letter))
+      .forEach(q => { updates[q.id] = null; });
+    await db.ref('letterQuestions').update(updates);
+  } else {
+    state.questions
+      .filter(q => selected.includes(q.category))
+      .forEach(q => { updates[q.id] = null; });
+    await db.ref('questions').update(updates);
+  }
+  state.adminFilter = selected.includes(state.adminFilter) ? '' : state.adminFilter;
+  clearAdminCategorySelection(false);
+  await loadQuestionsFromFirebase();
+  showToast(`تم حذف ${selected.length} ${state.adminView === 'lettersQuestions' ? 'حرفًا' : 'تصنيفًا'}`);
+  renderAdmin();
+}
+
+function renderAdminSelectionToolbar(kindLabel = 'التصنيفات', accent = 'indigo') {
+  syncAdminSelections();
+  const selected = getAdminSelectedItems();
+  const accentMap = {
+    indigo: {
+      soft: 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100',
+      danger: 'bg-rose-500 text-white hover:bg-rose-600',
+      hint: 'text-indigo-600'
+    },
+    emerald: {
+      soft: 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100',
+      danger: 'bg-rose-500 text-white hover:bg-rose-600',
+      hint: 'text-emerald-600'
+    }
+  };
+  const palette = accentMap[accent] || accentMap.indigo;
+  return `
+    <div class="flex items-center justify-between gap-3 mb-4 flex-wrap">
+      <p class="text-sm font-black ${palette.hint}">المحدد الآن: ${selected.length} / ${state.categories.length} ${kindLabel}</p>
+      <div class="flex flex-wrap gap-2">
+        <button onclick="selectAllAdminCategories()" class="px-3 py-2 rounded-xl text-sm font-black transition ${palette.soft}">تحديد الكل</button>
+        <button onclick="clearAdminCategorySelection()" class="px-3 py-2 rounded-xl text-sm font-black transition bg-slate-100 text-slate-700 hover:bg-slate-200">إلغاء التحديد</button>
+        <button onclick="deleteSelectedAdminCategories()" class="px-3 py-2 rounded-xl text-sm font-black transition ${selected.length ? palette.danger : 'bg-slate-200 text-slate-400 cursor-not-allowed'}" ${selected.length ? '' : 'disabled'}>حذف المحدد</button>
+      </div>
+    </div>`;
+}
+
 function renderLettersAdmin() {
+  syncAdminSelections();
+  const selectedLetters = new Set(getAdminSelectedItems());
   const app = getApp();
   app.innerHTML = `
     <div class="h-full w-full overflow-auto p-4">
@@ -3332,11 +3436,12 @@ function renderLettersAdmin() {
         </div>
         <div class="bg-white rounded-xl shadow p-5 mb-4">
           <h3 class="font-bold text-lg mb-3">🔤 الحروف (${state.categories.length})</h3>
+          ${renderAdminSelectionToolbar('حرف', 'emerald')}
           <div class="flex flex-wrap gap-2">
             ${state.categories.map(letter => `
-              <div class="flex items-center gap-1 px-3 py-1.5 bg-emerald-50 rounded-full">
-                <span class="text-sm font-bold text-emerald-700">${letter}</span>
-                <button onclick="deleteLettersLetter('${letter.replace(/'/g, "\\'")}')" class="text-red-400 hover:text-red-600 text-xs ml-1">✕</button>
+              <div class="flex items-center gap-1 rounded-full border transition ${selectedLetters.has(letter) ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-emerald-50 border-emerald-100 text-emerald-700'}">
+                <button onclick="toggleAdminCategorySelection('${letter.replace(/'/g, "\\'")}')" class="px-3 py-1.5 text-sm font-bold">${selectedLetters.has(letter) ? '✓ ' : ''}${letter}</button>
+                <button onclick="deleteLettersLetter('${letter.replace(/'/g, "\\'")}')" class="px-2 text-xs ${selectedLetters.has(letter) ? 'text-emerald-100 hover:text-white' : 'text-red-400 hover:text-red-600'}">✕</button>
               </div>
             `).join('')}
           </div>
@@ -3439,6 +3544,8 @@ async function deleteLettersLetter(letter) {
   const updates = {};
   qs.forEach(q => { updates[q.id] = null; });
   await db.ref('letterQuestions').update(updates);
+  state.adminSelectedLetters = (state.adminSelectedLetters || []).filter(item => item !== letter);
+  state.adminFilter = state.adminFilter === letter ? '' : state.adminFilter;
   await loadQuestionsFromFirebase();
   renderAdmin();
 }
@@ -3481,6 +3588,8 @@ async function saveLettersEditQ(id) {
 }
 
 function renderQuizAdmin() {
+  syncAdminSelections();
+  const selectedCategories = new Set(getAdminSelectedItems());
   const app = getApp();
   app.innerHTML = `
     <div class="h-full w-full overflow-auto p-4">
@@ -3510,11 +3619,12 @@ function renderQuizAdmin() {
         <!-- Categories -->
         <div class="bg-white rounded-xl shadow p-5 mb-4">
           <h3 class="font-bold text-lg mb-3">📂 التصنيفات (${state.categories.length})</h3>
+          ${renderAdminSelectionToolbar('تصنيف', 'indigo')}
           <div class="flex flex-wrap gap-2" id="catList">
             ${state.categories.map(c => `
-              <div class="flex items-center gap-1 px-3 py-1.5 bg-indigo-50 rounded-full">
-                <span class="text-sm font-bold text-indigo-700">${c}</span>
-                <button onclick="deleteCategory('${c.replace(/'/g, "\\'")}')" class="text-red-400 hover:text-red-600 text-xs ml-1">✕</button>
+              <div class="flex items-center gap-1 rounded-full border transition ${selectedCategories.has(c) ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-indigo-50 border-indigo-100 text-indigo-700'}">
+                <button onclick="toggleAdminCategorySelection('${c.replace(/'/g, "\\'")}')" class="px-3 py-1.5 text-sm font-bold">${selectedCategories.has(c) ? '✓ ' : ''}${c}</button>
+                <button onclick="deleteCategory('${c.replace(/'/g, "\\'")}')" class="px-2 text-xs ${selectedCategories.has(c) ? 'text-indigo-100 hover:text-white' : 'text-red-400 hover:text-red-600'}">✕</button>
               </div>
             `).join('')}
           </div>
@@ -3626,6 +3736,8 @@ async function deleteCategory(cat) {
   const updates = {};
   qs.forEach(q => { updates[q.id] = null; });
   await db.ref('questions').update(updates);
+  state.adminSelectedCategories = (state.adminSelectedCategories || []).filter(item => item !== cat);
+  state.adminFilter = state.adminFilter === cat ? '' : state.adminFilter;
   await loadQuestionsFromFirebase();
   renderAdmin();
 }
