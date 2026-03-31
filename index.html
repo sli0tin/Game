@@ -137,6 +137,9 @@ const ACTIVE_MONITOR_STATUSES = {
   quiz: ['game', 'loading', 'question', 'evaluating', 'result', 'noAnswer'],
   letters: ['game']
 };
+const ROOM_IDLE_TIMEOUT_MS = 20 * 60 * 1000;
+const MIYADEEN_TELEGRAM_URL = 'https://t.me/tdramalive';
+const LETTERS_QUESTION_COUNTDOWN_MS = 3000;
 const LETTERS_TEAMS = [
   { id: 'green', name: 'الفريق الأخضر', hex: '#16a34a', soft: '#dcfce7' },
   { id: 'red', name: 'الفريق الأحمر', hex: '#ef4444', soft: '#fee2e2' }
@@ -144,6 +147,7 @@ const LETTERS_TEAMS = [
 
 let clickTimes = [];
 let adminRoomCollections = { quiz: {}, letters: {} };
+let staleRoomSweepBusy = false;
 let defaultConfig = { game_title: 'الميدان' };
 let config = { ...defaultConfig };
 
@@ -345,9 +349,11 @@ function getLettersActiveLiveResult(room = state.room) {
 function getLettersVisibleQuestion(room = state.room) {
   const question = room?.letters?.currentQuestion;
   if (!question?.id || !room?.letters?.showQuestionInLive) return null;
+  if (getLettersQuestionRemainingMs(room) > 0) return null;
   return question;
 }
 function getLettersQuestionRemainingMs(room = state.room) {
+  if (!room?.letters?.showQuestionInLive) return 0;
   const visibleUntil = Number(room?.letters?.questionVisibleUntil || 0);
   return Math.max(0, visibleUntil - estimatedServerNow());
 }
@@ -357,10 +363,12 @@ function getLettersQuestionRemainingSeconds(room = state.room) {
 }
 function syncLettersTransientTimeout(room = state.room) {
   clearLettersTransientTimeout();
-  let remaining = 0;
+  const countdownRemaining = getLettersQuestionRemainingMs(room);
+  let remaining = countdownRemaining;
   const result = getLettersActiveLiveResult(room);
   if (result) {
-    remaining = LETTERS_LIVE_RESULT_DURATION - (estimatedServerNow() - Number(result.shownAt || 0));
+    const resultRemaining = LETTERS_LIVE_RESULT_DURATION - (estimatedServerNow() - Number(result.shownAt || 0));
+    remaining = remaining ? Math.min(remaining, resultRemaining) : resultRemaining;
   }
   if (!remaining) return;
   state.lettersTransientTimeout = setTimeout(() => {
@@ -523,6 +531,61 @@ function clearRoomSession() {
     localStorage.removeItem(ROOM_SESSION_KEY);
   } catch (_) {}
 }
+function copyText(text = '', successMessage = 'تم النسخ') {
+  if (!text) return;
+  navigator.clipboard.writeText(text)
+    .then(() => showToast(successMessage))
+    .catch(() => showToast('تعذر النسخ الآن'));
+}
+function renderTelegramJoinButton(compact = false) {
+  return `
+    <a href="${MIYADEEN_TELEGRAM_URL}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center justify-center gap-2 ${compact ? 'w-full' : ''} px-4 py-2 rounded-xl bg-sky-500 text-white text-sm font-black hover:bg-sky-600 transition">
+      <span>✈️</span>
+      <span>انضم إلى قروب ميادين</span>
+    </a>`;
+}
+function getRoomLastActivity(room = {}) {
+  return Number(room?.lastActivityAt || room?.created || 0);
+}
+function isRoomInactive(room = {}) {
+  const lastActivityAt = getRoomLastActivity(room);
+  return !!lastActivityAt && (estimatedServerNow() - lastActivityAt >= ROOM_IDLE_TIMEOUT_MS);
+}
+async function touchCurrentRoomActivity(roomLike = state.room) {
+  if (!state.roomId) return;
+  try {
+    await getGameRoomRef(state.roomId, roomLike).update({
+      lastActivityAt: firebase.database.ServerValue.TIMESTAMP
+    });
+  } catch (_) {}
+}
+async function sweepInactiveRooms() {
+  if (staleRoomSweepBusy) return;
+  staleRoomSweepBusy = true;
+  try {
+    for (const path of ['rooms', 'letterRooms']) {
+      const snap = await db.ref(path).once('value');
+      const rooms = snap.val() || {};
+      const updates = {};
+      Object.entries(rooms).forEach(([roomId, room]) => {
+        if (isRoomInactive(room)) {
+          updates[roomId] = null;
+        }
+      });
+      if (Object.keys(updates).length) {
+        await db.ref(path).update(updates);
+      }
+    }
+  } finally {
+    staleRoomSweepBusy = false;
+  }
+}
+function startInactiveRoomSweeper() {
+  if (window.__mayadinRoomSweeperStarted) return;
+  window.__mayadinRoomSweeperStarted = true;
+  setTimeout(() => { sweepInactiveRooms().catch(() => {}); }, 5000);
+  setInterval(() => { sweepInactiveRooms().catch(() => {}); }, 60000);
+}
 function stopPresenceTracking(markOffline = true) {
   if (state.connectedRef && state.connectedCb) {
     state.connectedRef.off('value', state.connectedCb);
@@ -664,6 +727,7 @@ function syncExitOverlay() {
 function renderHostOverlay() {
   const players = state.room?.players ? Object.values(state.room.players) : [];
   const onlineCount = players.filter(p => state.room?.presence?.[p.id]?.online).length;
+  const liveLink = state.room?.game === 'letters' ? getLettersLiveLink(state.room) : '';
   return `
     <div class="fixed top-3 right-3 z-[1100]">
       <button onclick="toggleHostPanel()" class="h-10 min-w-[42px] rounded-full bg-slate-900/90 text-white px-3 shadow-xl backdrop-blur flex items-center justify-center gap-1 text-sm font-black hover:bg-slate-800 transition">
@@ -678,6 +742,11 @@ function renderHostOverlay() {
             <p class="text-[11px] text-slate-300">${onlineCount}/${players.length} متصل الآن</p>
           </div>
           <div class="p-2 max-h-[70vh] overflow-auto space-y-1">
+            ${liveLink ? `
+              <button onclick="copyText('${liveLink}','تم نسخ رابط البث المباشر')" class="w-full mb-2 rounded-xl bg-sky-500 text-white px-3 py-3 text-sm font-black hover:bg-sky-600 transition">
+                نسخ رابط البث المباشر
+              </button>
+            ` : ''}
             <p class="px-2 pt-1 pb-2 text-[11px] text-slate-400">اضغط على اسم اللاعب لطرده من الغرفة.</p>
             ${players.map(p => {
               const isHostPlayer = p.id === state.room.host;
@@ -747,7 +816,8 @@ async function removePlayerFromRoom(playerId, roomOverride = null) {
     }
     await roomRef.update({
       [`players/${playerId}`]: null,
-      [`presence/${playerId}`]: null
+      [`presence/${playerId}`]: null,
+      lastActivityAt: firebase.database.ServerValue.TIMESTAMP
     });
     return true;
   }
@@ -763,7 +833,8 @@ async function removePlayerFromRoom(playerId, roomOverride = null) {
     [`presence/${playerId}`]: null,
     [`answers/${playerId}`]: null,
     [`answerTimes/${playerId}`]: null,
-    [`answerOrders/${playerId}`]: null
+    [`answerOrders/${playerId}`]: null,
+    lastActivityAt: firebase.database.ServerValue.TIMESTAMP
   };
 
   if (room.host === playerId) {
@@ -1164,6 +1235,7 @@ function renderHome(joinMode = false) {
             <button onclick="joinRoom()" class="w-full py-3 bg-green-500 hover:bg-green-600 text-white rounded-xl font-bold text-lg transition">
               🚪 انضم للغرفة
             </button>
+            ${renderTelegramJoinButton(true)}
           ` : `
             <button onclick="createRoom()" class="w-full py-3 bg-indigo-500 hover:bg-indigo-600 text-white rounded-xl font-bold text-lg transition">
               🎮 إنشاء غرفة
@@ -1191,6 +1263,7 @@ function renderLettersHome(joinMode = false) {
             <button onclick="joinRoom()" class="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-bold text-lg transition">
               🚪 انضم للغرفة
             </button>
+            ${renderTelegramJoinButton(true)}
           ` : `
             <button onclick="createRoom()" class="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-bold text-lg transition">
               🎮 إنشاء غرفة
@@ -1269,7 +1342,8 @@ async function createLettersRoom() {
       winnerTeam: '',
       winnerAt: null
     },
-    created: Date.now()
+    created: Date.now(),
+    lastActivityAt: Date.now()
   };
   await getLettersRoomRef(state.roomId).set(roomData);
   listenLettersRoom(state.roomId);
@@ -1298,12 +1372,56 @@ async function joinLettersRoom() {
   await getLettersRoomRef(state.roomId).child('players/' + state.playerId).set({
     name, id: state.playerId, emoji: PLAYER_EMOJIS[idx % PLAYER_EMOJIS.length] || '😀', color: '', score: 0, ready: false, role: 'player', team: ''
   });
+  await getLettersRoomRef(state.roomId).update({
+    lastActivityAt: firebase.database.ServerValue.TIMESTAMP
+  });
   listenLettersRoom(state.roomId);
   startPresenceTracking();
   persistRoomSession();
   setRoomUrl();
   state.page = 'lobby';
   renderCurrentPage();
+}
+
+async function addLettersDummyPlayers() {
+  const room = state.room;
+  if (!state.isHost || !room) return;
+  const players = getLettersPlayers(room);
+  const needed = Math.max(0, 2 - players.length);
+  if (!needed) {
+    showToast('عدد اللاعبين يكفي لبدء اللعبة');
+    return;
+  }
+  if (players.length >= LETTERS_PLAYER_LIMIT) {
+    showToast('الغرفة ممتلئة');
+    return;
+  }
+  const currentDummyCount = players.filter(player => player.dummy).length;
+  const updates = {
+    lastActivityAt: firebase.database.ServerValue.TIMESTAMP
+  };
+  for (let i = 0; i < needed && (players.length + i) < LETTERS_PLAYER_LIMIT; i++) {
+    const playerId = genId();
+    const playerNumber = currentDummyCount + i + 1;
+    updates[`players/${playerId}`] = {
+      name: `وهمي ${playerNumber}`,
+      id: playerId,
+      emoji: PLAYER_EMOJIS[(players.length + i) % PLAYER_EMOJIS.length] || '😀',
+      color: '',
+      score: 0,
+      ready: false,
+      role: 'player',
+      team: '',
+      dummy: true
+    };
+  }
+  const added = Object.keys(updates).filter(key => key.startsWith('players/')).length;
+  if (!added) {
+    showToast('تعذر إضافة لاعبين وهميين الآن');
+    return;
+  }
+  await getLettersRoomRef().update(updates);
+  showToast(`تمت إضافة ${added} لاعب وهمي`);
 }
 
 async function createRoom() {
@@ -1326,7 +1444,8 @@ async function createRoom() {
     players: {
       [state.playerId]: { name, id: state.playerId, emoji: PLAYER_EMOJIS[0], color: '', score: 0, ready: false }
     },
-    created: Date.now()
+    created: Date.now(),
+    lastActivityAt: Date.now()
   };
   await db.ref('rooms/' + state.roomId).set(roomData);
   listenRoom(state.roomId);
@@ -1357,6 +1476,9 @@ async function joinRoom() {
   const idx = playerCount;
   await db.ref('rooms/' + state.roomId + '/players/' + state.playerId).set({
     name, id: state.playerId, emoji: PLAYER_EMOJIS[idx] || '😀', color: '', score: 0, ready: false
+  });
+  await db.ref('rooms/' + state.roomId).update({
+    lastActivityAt: firebase.database.ServerValue.TIMESTAMP
   });
   listenRoom(state.roomId);
   startPresenceTracking();
@@ -1397,6 +1519,9 @@ function renderLobby() {
             <button onclick="navigator.clipboard.writeText('${link}');showToast('تم نسخ الرابط!')" class="px-4 py-2 bg-indigo-100 text-indigo-600 rounded-lg font-bold text-sm hover:bg-indigo-200 transition">
               📋 نسخ
             </button>
+          </div>
+          <div class="mt-3 flex justify-center">
+            ${renderTelegramJoinButton()}
           </div>
         </div>
         <div class="bg-white rounded-2xl shadow-lg p-5 mb-4">
@@ -1456,18 +1581,12 @@ function renderLettersLobby() {
         <h2 class="text-3xl font-black text-emerald-700 mb-1">🔤 ميدان الحروف</h2>
         <p class="text-gray-400 mb-4">غرفة الحروف</p>
         ${state.isHost ? `
-          <div class="grid gap-4 md:grid-cols-2 mb-4">
-            ${[
-              { title: 'رابط اللاعبين', value: joinLink, bg: 'from-emerald-500 to-teal-500' },
-              { title: 'رابط البث المباشر', value: liveLink, bg: 'from-rose-500 to-red-500' }
-            ].map(item => `
-              <div class="bg-white rounded-2xl shadow-lg p-4 text-right">
-                <div class="h-2 rounded-full bg-gradient-to-l ${item.bg} mb-3"></div>
-                <p class="text-sm font-black text-slate-700 mb-2">${item.title}</p>
-                <input readonly value="${item.value}" class="w-full px-3 py-2 bg-slate-50 rounded-lg text-[11px] text-slate-600 outline-none mb-2">
-                <button onclick="navigator.clipboard.writeText('${item.value}');showToast('تم نسخ الرابط')" class="w-full py-2 rounded-xl bg-slate-900 text-white text-sm font-black hover:bg-slate-800 transition">نسخ الرابط</button>
-              </div>
-            `).join('')}
+          <div class="bg-white rounded-2xl shadow-lg p-5 mb-4">
+            <div class="space-y-3">
+              <button onclick="copyText('${joinLink}','تم نسخ رابط الانضمام')" class="w-full py-3 rounded-2xl bg-emerald-500 text-white font-black hover:bg-emerald-600 transition">نسخ رابط الانضمام</button>
+              <button onclick="copyText('${liveLink}','تم نسخ رابط البث المباشر')" class="w-full py-3 rounded-2xl bg-rose-500 text-white font-black hover:bg-rose-600 transition">نسخ رابط البث المباشر</button>
+              ${renderTelegramJoinButton(true)}
+            </div>
           </div>
         ` : ''}
         <div class="bg-white rounded-2xl shadow-lg p-5 mb-4">
@@ -1486,18 +1605,22 @@ function renderLettersLobby() {
                 <div class="text-4xl mb-1">${p.emoji}</div>
                 <p class="text-sm font-bold ${p.id === state.playerId ? 'text-emerald-600' : 'text-gray-700'}">${p.name}</p>
                 ${renderPresenceBadge(p.id)}
-                ${p.team ? `<span class="text-xs font-black mt-1 inline-block" style="color:${getLettersTeamMeta(p.team).hex}">${getLettersTeamMeta(p.team).name}</span>` : '<span class="text-xs text-slate-400">بانتظار اختيار الفريق</span>'}
+                ${p.dummy ? '<span class="text-xs text-slate-400">لاعب وهمي</span>' : p.team ? `<span class="text-xs font-black mt-1 inline-block" style="color:${getLettersTeamMeta(p.team).hex}">${getLettersTeamMeta(p.team).name}</span>` : '<span class="text-xs text-slate-400">بانتظار اختيار الفريق</span>'}
               </div>
             `).join('')}
           </div>
         </div>
         ${state.isHost ? `
-          <div class="flex justify-center">
+          <div class="flex justify-center gap-3 flex-wrap">
             <button onclick="goColorPick()" class="px-6 py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-black transition ${players.length < 2 ? 'opacity-50 cursor-not-allowed' : ''}" ${players.length < 2 ? 'disabled' : ''}>بدء اللعبة</button>
+            <button onclick="addLettersDummyPlayers()" class="px-6 py-3 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-black transition">لاعبين وهميين</button>
           </div>
           ${players.length < 2 ? '<p class="mt-3 text-sm text-slate-400">يلزم لاعبان على الأقل قبل البدء.</p>' : ''}
         ` : `
-          <p class="text-gray-500 text-sm font-bold">بانتظار منشئ الغرفة لبدء اللعبة</p>
+          <div class="space-y-3">
+            <p class="text-gray-500 text-sm font-bold">بانتظار منشئ الغرفة لبدء اللعبة</p>
+            ${renderTelegramJoinButton()}
+          </div>
         `}
       </div>
     </div>`;
@@ -1718,6 +1841,7 @@ async function pickLettersQuestionForCell(cellId, excludeQuestionId = '') {
       answer: picked.answer || ''
     }
   });
+  await touchCurrentRoomActivity();
   return true;
 }
 
@@ -1773,6 +1897,7 @@ async function clearLettersCell(cellId) {
     }
     return letters;
   });
+  if (tx.committed) await touchCurrentRoomActivity();
   if (!tx.committed) showToast('تعذر إزالة لون الخلية الآن');
 }
 
@@ -1819,6 +1944,7 @@ async function claimLettersCell(team, playerId = '') {
       letters.winnerTeam = winnerTeam;
       letters.winnerAt = estimatedServerNow();
     }
+    roomData.lastActivityAt = estimatedServerNow();
     return roomData;
   });
   state.lettersAnswerPickerOpen = false;
@@ -1835,6 +1961,7 @@ async function clearLettersSelection() {
     showQuestionInLive: false,
     questionVisibleUntil: 0
   });
+  await touchCurrentRoomActivity();
 }
 
 async function toggleLettersQuestionBroadcast(forceVisible = null) {
@@ -1844,14 +1971,15 @@ async function toggleLettersQuestionBroadcast(forceVisible = null) {
     showToast('اختر حرفًا وسؤالًا أولًا');
     return;
   }
-  const shouldShow = typeof forceVisible === 'boolean' ? forceVisible : !getLettersVisibleQuestion(room);
+  const shouldShow = typeof forceVisible === 'boolean' ? forceVisible : !room?.letters?.showQuestionInLive;
   await getLettersRoomRef().child('letters').update(shouldShow ? {
     showQuestionInLive: true,
-    questionVisibleUntil: 0
+    questionVisibleUntil: estimatedServerNow() + LETTERS_QUESTION_COUNTDOWN_MS
   } : {
     showQuestionInLive: false,
     questionVisibleUntil: 0
   });
+  await touchCurrentRoomActivity();
 }
 
 function toggleLettersWinnerPicker(forceState) {
@@ -1866,6 +1994,7 @@ async function announceLettersWinner(team) {
   state.lettersAnswerPickerOpen = false;
   await getLettersRoomRef().update({
     status: 'winner',
+    lastActivityAt: firebase.database.ServerValue.TIMESTAMP,
     'letters/showQuestionInLive': false,
     'letters/questionVisibleUntil': 0,
     'letters/currentCellId': '',
@@ -1886,6 +2015,7 @@ async function restartLettersRoom() {
   const room = state.room;
   const updates = {
     status: 'lobby',
+    lastActivityAt: firebase.database.ServerValue.TIMESTAMP,
     letters: {
       ...boardState,
       showQuestionInLive: false,
@@ -1915,6 +2045,16 @@ function renderLettersBroadcastQuestionCard(room = state.room, compact = false) 
       <p class="text-sm font-black tracking-[0.25em] text-amber-500 mb-3">السؤال المعروض</p>
       <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-amber-100 text-4xl font-black text-amber-600 mb-4">${q.letter || '؟'}</div>
       <p class="${compact ? 'text-xl leading-10' : 'text-3xl leading-[1.9]'} font-black text-slate-900">${q.question}</p>
+    </div>`;
+}
+
+function renderLettersQuestionCountdownCard(room = state.room, compact = false) {
+  const remaining = getLettersQuestionRemainingSeconds(room);
+  if (!room?.letters?.showQuestionInLive || remaining <= 0) return '';
+  return `
+    <div class="mx-auto ${compact ? 'max-w-lg' : 'max-w-2xl'} bg-white rounded-[2rem] shadow-2xl border border-emerald-100 p-5 md:p-7 text-center">
+      <p class="text-sm font-black tracking-[0.25em] text-emerald-500 mb-3">السؤال سيظهر بعد</p>
+      <div class="${compact ? 'text-7xl' : 'text-8xl'} font-black text-emerald-600 leading-none">${remaining}</div>
     </div>`;
 }
 
@@ -1955,9 +2095,12 @@ function renderLettersWinnerSplash(room = state.room) {
 
 function renderLettersStageContent(room = state.room, compact = false) {
   const liveResult = getLettersActiveLiveResult(room);
+  const questionCountdown = getLettersQuestionRemainingSeconds(room);
   const visibleQuestion = getLettersVisibleQuestion(room);
   const body = liveResult
     ? renderLettersLiveResultCard(room, compact)
+    : questionCountdown > 0
+      ? renderLettersQuestionCountdownCard(room, compact)
     : visibleQuestion
       ? renderLettersBroadcastQuestionCard(room, compact)
       : `<div class="mx-auto ${compact ? 'max-w-[390px]' : 'max-w-[720px]'}">${renderLettersBoard(room, { interactive: false })}</div>`;
@@ -1971,16 +2114,27 @@ function renderLettersStageContent(room = state.room, compact = false) {
 function renderLettersHostQuestionCard(room = state.room) {
   const q = room?.letters?.currentQuestion;
   if (!q) return '';
-  const shownInLive = !!getLettersVisibleQuestion(room);
+  const shownInLive = !!room?.letters?.showQuestionInLive;
+  const countdown = getLettersQuestionRemainingSeconds(room);
   return `
     <div class="mx-auto max-w-lg bg-white rounded-[2rem] shadow-2xl border border-amber-100 p-5 md:p-7 text-center">
       <p class="text-sm font-black tracking-[0.25em] text-amber-500 mb-3">السؤال المختار</p>
       <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-amber-100 text-4xl font-black text-amber-600 mb-4">${q.letter || '؟'}</div>
       <p class="text-xl leading-10 font-black text-slate-900">${q.question}</p>
       <p class="mt-3 text-sm font-black text-emerald-700">الجواب: ${q.answer || 'غير محدد'}</p>
+      ${shownInLive ? `
+        <div class="mt-4 rounded-2xl ${countdown > 0 ? 'bg-emerald-50 border border-emerald-200' : 'bg-emerald-600'} px-4 py-3">
+          ${countdown > 0 ? `
+            <p class="text-sm font-black text-emerald-700 mb-1">جاري عرض السؤال خلال</p>
+            <p class="text-4xl font-black text-emerald-600">${countdown}</p>
+          ` : `
+            <p class="text-sm font-black text-white">السؤال معروض الآن للاعبين</p>
+          `}
+        </div>
+      ` : ''}
       <div class="mt-4 flex flex-wrap justify-center gap-2">
         <button onclick="changeLettersQuestion()" class="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-black hover:bg-slate-200 transition">سؤال آخر</button>
-        <button onclick="toggleLettersQuestionBroadcast(${shownInLive ? 'false' : 'true'})" class="px-4 py-2 rounded-xl bg-amber-500 text-white font-black hover:bg-amber-600 transition">${shownInLive ? 'إخفاء السؤال' : 'عرض السؤال'}</button>
+        <button onclick="toggleLettersQuestionBroadcast(${shownInLive ? 'false' : 'true'})" class="px-4 py-2 rounded-xl ${shownInLive ? 'bg-emerald-600 text-white hover:bg-emerald-700' : 'bg-amber-500 text-white hover:bg-amber-600'} font-black transition">${shownInLive ? 'إخفاء السؤال' : 'عرض السؤال'}</button>
         <button onclick="toggleLettersAnswerPicker()" class="px-4 py-2 rounded-xl bg-emerald-600 text-white font-black hover:bg-emerald-700 transition">${state.lettersAnswerPickerOpen ? 'إخفاء الجواب' : 'جواب'}</button>
         <button onclick="clearLettersSelection()" class="px-4 py-2 rounded-xl bg-slate-900 text-white font-black hover:bg-slate-800 transition">تغيير الحرف</button>
       </div>
@@ -2171,14 +2325,17 @@ async function goColorPick() {
     await goLettersColorPick();
     return;
   }
-  await db.ref('rooms/' + state.roomId + '/status').set('colorPick');
+  await db.ref('rooms/' + state.roomId).update({
+    status: 'colorPick',
+    lastActivityAt: firebase.database.ServerValue.TIMESTAMP
+  });
   state.page = 'colorPick';
 }
 
 async function goLettersColorPick() {
   const room = state.room;
   if (!room) return;
-  const updates = { status: 'colorPick' };
+  const updates = { status: 'colorPick', lastActivityAt: firebase.database.ServerValue.TIMESTAMP };
   getLettersPlayers(room).forEach(player => {
     updates[`players/${player.id}/team`] = '';
     updates[`players/${player.id}/color`] = '';
@@ -2209,6 +2366,7 @@ async function pickLettersTeam(teamId) {
     players[state.playerId] = me;
     return players;
   });
+  if (tx.committed) await touchCurrentRoomActivity();
   if (!tx.committed) showToast('تعذر اختيار الفريق الآن');
 }
 
@@ -2243,6 +2401,7 @@ async function assignLettersPlayerTeam(playerId, teamId = state.lettersTeamAssig
     players[playerId] = player;
     return players;
   });
+  if (tx.committed) await touchCurrentRoomActivity();
   if (!tx.committed) showToast('تعذر تحديث فريق اللاعب الآن');
 }
 
@@ -2259,6 +2418,7 @@ async function startLettersGame() {
   }
   await getLettersRoomRef().update({
     status: 'game',
+    lastActivityAt: firebase.database.ServerValue.TIMESTAMP,
     'letters/showQuestionInLive': false,
     'letters/questionVisibleUntil': 0,
     'letters/currentCellId': '',
@@ -2385,13 +2545,19 @@ function renderLettersColorPick() {
 }
 
 async function pickColor(hex) {
-  await db.ref(`rooms/${state.roomId}/players/${state.playerId}/color`).set(hex);
+  await db.ref(`rooms/${state.roomId}`).update({
+    [`players/${state.playerId}/color`]: hex,
+    lastActivityAt: firebase.database.ServerValue.TIMESTAMP
+  });
 }
 
 async function goCatPick() {
   await loadQuestionsFromFirebase();
-  await db.ref(`rooms/${state.roomId}/status`).set('catPick');
-  await db.ref(`rooms/${state.roomId}/allCategories`).set(state.categories);
+  await db.ref(`rooms/${state.roomId}`).update({
+    status: 'catPick',
+    allCategories: state.categories,
+    lastActivityAt: firebase.database.ServerValue.TIMESTAMP
+  });
   state.page = 'catPick';
 }
 
@@ -2435,7 +2601,10 @@ async function toggleCat(cat) {
     if (selected.length >= 6) return;
     selected.push(cat);
   }
-  await db.ref(`rooms/${state.roomId}/selectedCategories`).set(selected);
+  await db.ref(`rooms/${state.roomId}`).update({
+    selectedCategories: selected,
+    lastActivityAt: firebase.database.ServerValue.TIMESTAMP
+  });
 }
 
 async function startGame() {
@@ -2453,7 +2622,8 @@ async function startGame() {
     board,
     turnIndex: 0,
     turnOrder,
-    currentQ: null
+    currentQ: null,
+    lastActivityAt: firebase.database.ServerValue.TIMESTAMP
   });
   state.page = 'game';
 }
@@ -2553,7 +2723,8 @@ async function selectQuestion(cat, pts) {
     currentQ: { ...q, cat, pts, startTime: null, loadingAt: estimatedServerNow(), answerCounter: 0 },
     answers: null,
     answerTimes: null,
-    answerOrders: null
+    answerOrders: null,
+    lastActivityAt: firebase.database.ServerValue.TIMESTAMP
   });
   // Add to used
   await db.ref(`rooms/${state.roomId}/usedQuestions`).push(q.id);
@@ -2733,6 +2904,7 @@ async function submitAnswer(ans) {
       room.status = 'evaluating';
       room.currentQ.evaluatingAt = estimatedServerNow();
     }
+    room.lastActivityAt = estimatedServerNow();
     return room;
   });
   if (!tx.committed) showToast('تعذر إرسال الإجابة، حاول مرة أخرى');
@@ -2751,6 +2923,7 @@ async function evaluateAnswers(expectedQuestionKey = '') {
     if (!allAnswered && elapsedMs < 40000) return room;
     room.status = 'evaluating';
     room.currentQ.evaluatingAt = estimatedServerNow();
+    room.lastActivityAt = estimatedServerNow();
     return room;
   });
 }
@@ -2788,12 +2961,14 @@ async function finalizeAnswerAnalysis(expectedQuestionKey = '') {
       room.board[q.cat][ptsValue] = fastest.color || '#22c55e';
       room.status = 'result';
       room.lastResult = { winner: fastest.name, emoji: fastest.emoji, pts: ptsValue, answer: correctAnswer };
+      room.lastActivityAt = estimatedServerNow();
       return room;
     }
 
     room.board[q.cat][ptsValue] = 'dark';
     room.status = 'noAnswer';
     room.lastResult = { pts: ptsValue, answer: correctAnswer };
+    room.lastActivityAt = estimatedServerNow();
     return room;
   });
 }
@@ -2871,6 +3046,7 @@ async function proceedToNext(expectedStatus = '') {
       room.answers = null;
       room.answerTimes = null;
       room.answerOrders = null;
+      room.lastActivityAt = estimatedServerNow();
       return room;
     }
     const turnOrder = room.turnOrder || [];
@@ -2881,6 +3057,7 @@ async function proceedToNext(expectedStatus = '') {
     room.answers = null;
     room.answerTimes = null;
     room.answerOrders = null;
+    room.lastActivityAt = estimatedServerNow();
     return room;
   });
 }
@@ -3005,7 +3182,8 @@ async function newGame() {
     selectedCategories: null,
     allCategories: null,
     usedQuestions: null,
-    lastResult: null
+    lastResult: null,
+    lastActivityAt: firebase.database.ServerValue.TIMESTAMP
   });
   state.page = 'lobby';
   renderCurrentPage();
@@ -3077,6 +3255,7 @@ async function sendChat(e, inputId = 'chatInput') {
         time: queuedAt,
         order: room.chatSeq
       };
+      room.lastActivityAt = estimatedServerNow();
       return room;
     });
     if (!tx.committed) throw new Error('chat-send-aborted');
@@ -3137,6 +3316,23 @@ function getAdminStatusLabel(status = '') {
   return labels[status] || status || '—';
 }
 
+function formatAdminDateTime(stamp = 0) {
+  const value = Number(stamp || 0);
+  if (!value) return '—';
+  return new Date(value).toLocaleString('ar-KW', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: 'numeric',
+    minute: '2-digit'
+  });
+}
+
+function isRoomRecentlyActive(room = {}) {
+  const lastActivityAt = getRoomLastActivity(room);
+  return !!lastActivityAt && (estimatedServerNow() - lastActivityAt < 60000);
+}
+
 function isMonitorActiveRoom(room, game = 'quiz') {
   return ACTIVE_MONITOR_STATUSES[game]?.includes(room?.status || '');
 }
@@ -3155,7 +3351,10 @@ function rebuildAdminRooms() {
       status: room?.status || '',
       peopleCount: players.length,
       onlineCount: online,
-      createdAt: Number(room?.currentQ?.startTime || room?.currentQ?.loadingAt || room?.created || 0)
+      createdAt: Number(room?.created || 0),
+      lastActivityAt: getRoomLastActivity(room),
+      names: players.map(player => player.name).filter(Boolean),
+      isLiveNow: isRoomRecentlyActive(room)
     });
   });
   Object.entries(adminRoomCollections.letters || {}).forEach(([id, room]) => {
@@ -3170,7 +3369,10 @@ function rebuildAdminRooms() {
       status: room?.status || '',
       peopleCount: players.length,
       onlineCount: online,
-      createdAt: Number(room?.letters?.winnerAt || room?.letters?.liveResult?.shownAt || room?.created || 0)
+      createdAt: Number(room?.created || 0),
+      lastActivityAt: getRoomLastActivity(room),
+      names: players.map(player => player.name).filter(Boolean),
+      isLiveNow: isRoomRecentlyActive(room)
     });
   });
   state.adminRooms = rooms.sort((a, b) => (b.createdAt - a.createdAt) || String(a.roomId).localeCompare(String(b.roomId)));
@@ -3277,7 +3479,7 @@ function renderAdminMonitor() {
         </div>
         <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           ${rooms.map(room => `
-            <div class="bg-white rounded-[1.75rem] border border-slate-200 shadow-lg p-5">
+            <div class="rounded-[1.75rem] border shadow-lg p-5 ${room.isLiveNow ? 'bg-emerald-50 border-emerald-300' : 'bg-white border-slate-200'}">
               <div class="flex items-start justify-between gap-3 mb-3">
                 <div>
                   <p class="text-xs font-black tracking-[0.2em] ${room.game === 'letters' ? 'text-emerald-600' : 'text-indigo-600'}">${room.game === 'letters' ? 'LETTERS' : 'QUIZ'}</p>
@@ -3289,6 +3491,9 @@ function renderAdminMonitor() {
                 <p><span class="font-black text-slate-800">رمز الغرفة:</span> ${room.roomId}</p>
                 <p><span class="font-black text-slate-800">عدد الداخلين:</span> ${room.peopleCount}</p>
                 <p><span class="font-black text-slate-800">المتصلون الآن:</span> ${room.onlineCount}</p>
+                <p><span class="font-black text-slate-800">تم الإنشاء:</span> ${formatAdminDateTime(room.createdAt)}</p>
+                <p><span class="font-black text-slate-800">آخر تفاعل:</span> ${formatAdminDateTime(room.lastActivityAt)}</p>
+                <p><span class="font-black text-slate-800">الأسماء:</span> ${room.names.length ? room.names.join(' • ') : '—'}</p>
               </div>
               <button onclick="visitRoomAsSpectator('${room.game}','${room.roomId}')" class="mt-4 w-full py-3 rounded-2xl bg-slate-900 text-white font-black hover:bg-slate-800 transition">زيارة كمراقب</button>
             </div>
@@ -3839,6 +4044,7 @@ function showToast(msg) {
   firebase.database().ref('.info/serverTimeOffset').on('value', snap => {
     state.serverTimeOffset = Number(snap.val() || 0);
   });
+  startInactiveRoomSweeper();
   const params = new URLSearchParams(window.location.search);
   const saved = loadRoomSession();
   const inferredGame = params.get('game') || params.get('g') || (/letters\.html$/i.test(window.location.pathname) ? 'letters' : '') || saved?.gameMode || '';
